@@ -87,6 +87,10 @@ class Run(BaseModel):
     spent_usd: float = 0.0
     iterations_used: int = 0
     plan_hash: str | None = None
+    task_token: str | None = None
+    """Step Functions task token for the AwaitApproval callback (Fase 4).
+    Internal only -- never included in a public API response (see
+    services/api/handler.py's get_run, which excludes it explicitly)."""
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -127,6 +131,18 @@ class StrategyLimits(BaseModel):
     max_minutes: StrategyLimit
 
 
+class StrategyModelLimits(BaseModel):
+    """Per-role max_tokens, fixed by the strategy -- CLAUDE.md: "Cada
+    llamada lleva un max_tokens de salida fijado por la estrategia, no
+    elegido por el agente." Defaults are conservative, generic values;
+    a strategy overrides them if its own phases need more headroom."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_max_tokens: int = 4096
+    code_max_tokens: int = 8192
+
+
 class StrategyManifest(BaseModel):
     """Mirrors `#/components/schemas/StrategyManifest`.
 
@@ -145,3 +161,4 @@ class StrategyManifest(BaseModel):
     checks: list[str]
     writable_paths: list[str]
     sources: list[str]
+    model_limits: StrategyModelLimits = Field(default_factory=StrategyModelLimits)

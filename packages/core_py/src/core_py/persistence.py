@@ -33,6 +33,15 @@ class BudgetExceededError(Exception):
     `PRESUPUESTO_AGOTADO` instead of treating it as an infra failure."""
 
 
+class ApprovalConflictError(Exception):
+    """Raised by `RunsTable.approve_or_reject` when the conditional update
+    fails: the run isn't AWAITING_APPROVAL, `sub` doesn't match
+    `requested_by`, or `plan_hash` is stale. The caller (services/api)
+    maps this to a 409; a 403 identity mismatch is checked separately,
+    before this method is even called, so the two cases stay
+    distinguishable to the API client."""
+
+
 def _floats_to_decimal(item: dict[str, Any]) -> dict[str, Any]:
     """DynamoDB's low-level type serializer rejects Python `float`
     outright ("use Decimal types instead"). Round-trip through JSON so
@@ -132,6 +141,48 @@ class RunsTable:
                 raise BudgetExceededError(
                     f"adding {delta} to run {run_id}'s spend would exceed "
                     f"max_usd={max_usd}"
+                ) from exc
+            raise
+
+    def approve_or_reject(
+        self, run_id: uuid.UUID | str, *, sub: str, plan_hash: str, new_status: str
+    ) -> None:
+        """The design's own "un solo update condicional": status transitions
+        away from AWAITING_APPROVAL only if `sub == requested_by` AND the
+        provided `plan_hash` matches exactly -- in one atomic DynamoDB
+        write, never a read-then-write race between two people approving
+        the same run at once. CLAUDE.md: "quien crea la solicitud es quien
+        la aprueba," enforced here, not just in application logic that a
+        second request could race past.
+
+        Raises `ApprovalConflictError` if the condition fails -- wrong
+        person, wrong state, or a stale plan_hash (the plan changed since
+        the caller last fetched it). The caller (services/api) maps this
+        to 403 (identity mismatch, checked again before calling this so
+        the caller can tell that case apart from a stale hash/state) or
+        409 (state/hash conflict).
+        """
+
+        try:
+            self._table.update_item(
+                Key={"run_id": str(run_id)},
+                UpdateExpression="SET #status = :new_status",
+                ConditionExpression=(
+                    "#status = :awaiting AND requested_by = :sub AND plan_hash = :plan_hash"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":new_status": new_status,
+                    ":awaiting": "AWAITING_APPROVAL",
+                    ":sub": sub,
+                    ":plan_hash": plan_hash,
+                },
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise ApprovalConflictError(
+                    f"run {run_id} is not AWAITING_APPROVAL for requester {sub!r} "
+                    f"with plan_hash {plan_hash!r}"
                 ) from exc
             raise
 

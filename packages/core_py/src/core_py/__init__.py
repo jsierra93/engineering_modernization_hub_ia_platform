@@ -16,6 +16,7 @@ from core_py.models import (
     StrategyLimit,
     StrategyLimits,
     StrategyManifest,
+    StrategyModelLimits,
 )
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "StrategyLimit",
     "StrategyLimits",
     "StrategyManifest",
+    "StrategyModelLimits",
     "resolve_model_id",
 ]
