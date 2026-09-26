@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: engineering-modernization-hub-backstage
+  description: >-
+    Self-service portal for the Engineering Modernization Hub. Skeleton only
+    (PLAN.md task 5.1) — see apps/backstage/README.md for current scope.
+  # Example for optional annotations
+  # annotations:
+  #   github.com/project-slug: backstage/backstage
+  #   backstage.io/techdocs-ref: dir:.
+spec:
+  type: website
+  owner: jorgesierra93@gmail.com
+  lifecycle: experimental

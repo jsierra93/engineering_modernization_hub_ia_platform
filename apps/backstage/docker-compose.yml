@@ -1,0 +1,35 @@
+# Local-development compose file for the Backstage instance.
+#
+# Datastore choice: SQLite (better-sqlite3), per app-config.yaml's default
+# `backend.database` block. This is a prototype/hiring-case-study repo, not a
+# production deployment — Postgres (as used in app-config.production.yaml)
+# is unnecessary complexity for a single-user local demo. Switching to
+# Postgres later only means adding a `postgres` service here and pointing
+# POSTGRES_* env vars at it; app-config.production.yaml already expects that
+# shape.
+#
+# IMPORTANT: this builds packages/backend/Dockerfile, which expects the repo
+# to already be built on the host first (see the Dockerfile's own header
+# comment: `pnpm install && pnpm tsc && pnpm build:backend`). There is
+# nothing to authenticate against yet — the `oidc` auth provider in
+# app-config.yaml is a placeholder until infrastructure/modules/identity
+# (PLAN.md 4.1-tf) is applied and a real Cognito user pool exists.
+services:
+  backstage-backend:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    image: engineering-modernization-hub/backstage-backend:local
+    container_name: modhub-backstage-backend
+    ports:
+      - '7007:7007'
+    environment:
+      NODE_ENV: production
+      # Placeholder — Cognito does not exist yet. Filled in once
+      # infrastructure/modules/identity is applied (PLAN.md 4.1-tf).
+      AUTH_OIDC_CLIENT_SECRET: 'TODO-set-after-cognito-terraform-apply'
+    # Note: app-config.yaml's default `backend.database.connection` is
+    # `:memory:`, so catalog/scaffolder state does not survive a container
+    # restart. That is intentional for a prototype demo container — swap in
+    # a file path (and a bind-mounted volume) if persistence across restarts
+    # is ever needed for the live defense.
