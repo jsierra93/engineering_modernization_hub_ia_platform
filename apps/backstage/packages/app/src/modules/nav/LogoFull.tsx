@@ -10,7 +10,7 @@ const useStyles = makeStyles({
   },
 });
 
-export const LogoFull = () => {
+export const LogoFull = (): JSX.Element => {
   const classes = useStyles();
 
   return (

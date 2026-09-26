@@ -10,7 +10,7 @@ const useStyles = makeStyles({
   },
 });
 
-export const LogoIcon = () => {
+export const LogoIcon = (): JSX.Element => {
   const classes = useStyles();
 
   return (

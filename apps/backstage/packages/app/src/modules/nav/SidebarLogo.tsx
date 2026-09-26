@@ -22,7 +22,7 @@ const useSidebarLogoStyles = makeStyles({
   },
 });
 
-export const SidebarLogo = () => {
+export const SidebarLogo = (): JSX.Element => {
   const classes = useSidebarLogoStyles();
   const { isOpen } = useSidebarOpenState();
 

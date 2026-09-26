@@ -151,6 +151,35 @@ proxy:
   #     target: 'https://example.com'
   #     changeOrigin: true
 
+# Fase 5 (task 5.2/5.3): base URL of the deployed modhub/v1 API (the api
+# module's own `api_endpoint` Terraform output). Read by the modhub-backend
+# plugin (plugins/modhub-backend), which forwards each caller's own Cognito
+# access token to this URL rather than authenticating as itself -- there is
+# no service-level credential to modhub/v1 anywhere in this config.
+modhub:
+  baseUrl: ${MODHUB_API_BASE_URL}
+  # Local-dev-only escape hatch (2026-09-26): Floci's Cognito emulation
+  # doesn't expose an authorization_endpoint in its OIDC discovery
+  # document, so the real browser OAuth2 popup (plugins/modhub's own
+  # "oidc" flow) can never complete against it -- confirmed empirically.
+  # When set, modhub-backend (plugins/modhub-backend/src/router.ts) uses
+  # THIS token for every request to modhub/v1, ignoring whatever the
+  # browser sent -- read only by the backend, so no frontend config
+  # visibility to fight (an earlier frontend-side attempt at this same
+  # problem proved unreliable).
+  #
+  # Paste a fresh JWT here whenever the old one expires (Cognito access
+  # tokens from this project's identity module are valid ~60 minutes).
+  # Mint one with:
+  #   curl -s http://localhost:4566/2016-04-19/... # see start-local-env.sh's
+  #   own printed instructions for the exact boto3/curl command against
+  #   this env's actual Cognito pool id and client id.
+  #
+  # DELETE this key entirely once pointed at real AWS -- modhub-backend
+  # then requires and forwards each caller's own real Cognito token
+  # again, no code change needed.
+  devToken: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InVzLWVhc3QtMV81YzA0NTA5NzUifQ.eyJzdWIiOiIxNzc0YTRmYi00ZDI5LTRiZjktYTc3ZS04N2E3NTA5NWY0ZWIiLCJldmVudF9pZCI6IjBkNjk0YzlhLTc3YWItNDE0Yy1hMTQ0LTNmZjQyNDQ3YjM3NCIsInRva2VuX3VzZSI6ImlkIiwiYXV0aF90aW1lIjoxNzkwNDU3ODU0LCJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjQ1NjYvdXMtZWFzdC0xXzVjMDQ1MDk3NSIsImV4cCI6MTc5MDQ2MTQ1NCwiaWF0IjoxNzkwNDU3ODU0LCJjb2duaXRvOnVzZXJuYW1lIjoiMTc3NGE0ZmItNGQyOS00YmY5LWE3N2UtODdhNzUwOTVmNGViIiwianRpIjoiOThlMGNiOWEtZTA0ZS00ZTcxLWI2YjktYjk5NDdlODc3MmU4Iiwib3JpZ2luX2p0aSI6ImVlZGRlYjZhLTg5OTQtNDk2Ni1iZDAyLTljYTA3MDMwYTU5MyIsImF1ZCI6IjQ5ZDdiMjVkNmJkYjQ5NDE4ZDRmNGI1NDNiIiwiZW1haWwiOiJkZW1vLXJlcXVlc3RlckBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlfQ.1YRqhQJoGtAsl8OJhEIzhNl8LspuHr_WJj8R64FYmOp4GgENKtxIBJjwtXVzUAus5eAY8ppL9eoU3Hh0VTklBzqJxKBiVWbxSydfjxSDk_OKb_UNNnHiy_ouLlN5y4m8BCelMY_rpCOevsvloacxTVJ-XyLtCodsV36rrSf6ipeleBI4ITdPiDG-G5O_60lA556wHR1iqwzGbH0SLJ3X7VzeoiWvNQI9FXkeGFo2RbeLSdNhwVQeaWYG6U06yMPAUlBcE1DYuF0bhX3a-PiVA3v3Whyoi2_l0_U0xIDuF4SZt2VpMpS3_mN-6ayN0_J8eieR3M-c6Ft-2vAg2EoDrA'
+
 # Reference documentation http://backstage.io/docs/features/techdocs/configuration
 # Note: After experimenting with basic setup, use CI/CD to generate docs
 # and an external cloud storage when deploying TechDocs for production use-case.
@@ -170,23 +199,25 @@ auth:
     # is wired to a real Cognito user pool. Remove once oidc login works.
     guest: {}
 
-    # --- PLACEHOLDER: filled in during PLAN.md Fase 4/5, once the ---
-    # --- `identity` Terraform module (4.1-tf) has been applied and ---
-    # --- the `modhub-backstage` Cognito app client exists.         ---
-    #
-    # Requires adding `@backstage/plugin-auth-backend-module-oidc-provider`
-    # to packages/backend and wiring it in packages/backend/src/index.ts.
-    # See https://backstage.io/docs/auth/oidc/provider
+    # Fase 5, task 5.1: wired to the real Cognito user pool from
+    # infrastructure/modules/identity (task 4.1-tf) -- the
+    # modhub-backstage app client. Every value below comes from that
+    # module's Terraform outputs, exported as env vars before starting
+    # Backstage (see docker-compose.yml / README for the exact export
+    # commands):
+    #   AUTH_OIDC_METADATA_URL = "${module.identity.issuer_url}/.well-known/openid-configuration"
+    #   AUTH_OIDC_CLIENT_ID    = module.identity.backstage_client_id
+    #   AUTH_OIDC_CLIENT_SECRET = module.identity.backstage_client_secret
+    # No value is hardcoded here on purpose (CLAUDE.md: never commit
+    # anything that could hold a credential) -- an unset env var makes
+    # this provider fail to register rather than silently pointing at a
+    # wrong pool, which is why `guest` above stays enabled for local dev
+    # until these are actually exported.
     oidc:
       development:
-        # TODO(5.1 follow-up): replace with the real Cognito Hosted UI
-        # issuer once infrastructure/modules/identity is applied, e.g.
-        # https://cognito-idp.<region>.amazonaws.com/<user-pool-id>
-        metadataUrl: TODO-set-after-cognito-terraform-apply
-        clientId: TODO-set-after-cognito-terraform-apply
-        # The client secret must never be committed here. Once Cognito
-        # exists, source it from an env var, e.g. ${AUTH_OIDC_CLIENT_SECRET}.
-        clientSecret: TODO-set-after-cognito-terraform-apply
+        metadataUrl: ${AUTH_OIDC_METADATA_URL}
+        clientId: ${AUTH_OIDC_CLIENT_ID}
+        clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
         prompt: auto
   # see https://backstage.io/docs/ai/mcp-actions#client-id-metadata-documents
   # to learn more about client id metadata documents

@@ -22,6 +22,7 @@
     "@backstage/plugin-auth-backend": "^0.30.1",
     "@backstage/plugin-auth-backend-module-github-provider": "^0.5.7",
     "@backstage/plugin-auth-backend-module-guest-provider": "^0.2.23",
+    "@backstage/plugin-auth-backend-module-oidc-provider": "^0.4.21",
     "@backstage/plugin-auth-node": "^0.7.6",
     "@backstage/plugin-catalog-backend": "^4.0.0",
     "@backstage/plugin-catalog-backend-module-logs": "^0.1.26",
@@ -46,6 +47,7 @@
     "@backstage/plugin-techdocs-backend": "^2.3.0",
     "@backstage/plugin-user-settings-backend": "^0.4.7",
     "app": "link:../app",
+    "modhub-backend": "link:../../plugins/modhub-backend",
     "better-sqlite3": "^12.0.0",
     "node-gyp": "^10.0.0",
     "pg": "^8.11.3"

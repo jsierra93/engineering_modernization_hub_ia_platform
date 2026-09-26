@@ -29,6 +29,17 @@ backend.add(import('@backstage/plugin-auth-backend'));
 backend.add(import('@backstage/plugin-auth-backend-module-guest-provider'));
 // See https://backstage.io/docs/auth/guest/provider
 
+// Fase 5, task 5.1: real OIDC login against the Cognito user pool from
+// infrastructure/modules/identity (task 4.1-tf) -- Cognito exposes a
+// standard OIDC discovery document at
+// `${issuer_url}/.well-known/openid-configuration`, so the generic oidc
+// provider (not a Cognito-specific one -- Backstage ships none) is the
+// right fit. Configured entirely from env vars in app-config.yaml; see
+// that file's `auth.providers.oidc` block for what to set post-apply.
+backend.add(
+  import('@backstage/plugin-auth-backend-module-oidc-provider'),
+);
+
 // catalog plugin
 backend.add(import('@backstage/plugin-catalog-backend'));
 backend.add(
@@ -68,5 +79,9 @@ backend.add(import('@backstage/plugin-signals-backend'));
 
 // mcp actions plugin
 backend.add(import('@backstage/plugin-mcp-actions-backend'));
+
+// modhub-backend: forwards each caller's own Cognito bearer token to
+// modhub/v1 (Fase 5, task 5.2). See plugins/modhub-backend.
+backend.add(import('modhub-backend'));
 
 backend.start();

@@ -1,0 +1,1 @@
+export { ModernizacionesPage } from './ModernizacionesPage';
