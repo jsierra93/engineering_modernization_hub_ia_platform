@@ -11,17 +11,25 @@
 # environment. Since api and core_py are both pure-Python (no compiled
 # extensions of their own - only their *dependencies*, e.g. pydantic-core,
 # are compiled), we copy their source trees verbatim and use `pip install
-# --platform manylinux2014_aarch64 --only-binary=:all:` to fetch Linux
+# --platform manylinux2014_<arch> --only-binary=:all:` to fetch Linux
 # wheels for the third-party dependencies regardless of the host OS/Python
-# running this script. That matters here because the host is Windows and
-# the Lambda runtime (real AWS, or Floci's Docker-backed emulation) is
-# Linux/arm64 -- matching infrastructure/modules/api's `lambda_architectures`
-# default (Graviton2, same cost rationale as the sandbox Fargate task).
-# cp314 manylinux2014_aarch64 wheels confirmed to exist for pydantic-core
-# as of 2026-09-25 before this was pinned -- not assumed.
+# running this script.
+#
+# Architecture defaults to arm64, matching infrastructure/modules/api's
+# `lambda_architectures` default for real AWS (Graviton2, same cost
+# rationale as the sandbox Fargate task in the design artifact). Pass
+# x86_64 explicitly when building for Floci: empirically (2026-09-25,
+# `boto3 invoke` against a real deployed function), Floci runs Lambda
+# containers as the Docker host's native architecture -- it does not
+# cross-emulate arm64 -- so an arm64 .so there fails to import with a
+# misleading "No module named 'pydantic_core._pydantic_core'" (not an
+# ImportError naming the real cause). infrastructure/envs/local overrides
+# `lambda_architectures` to ["x86_64"] for exactly this reason; keep this
+# script's default in sync with envs/personal (arm64), not envs/local.
 #
 # Usage:
-#   infrastructure/scripts/build_lambda.sh [output_zip_path]
+#   infrastructure/scripts/build_lambda.sh [output_zip_path] [arch]
+#   arch: arm64 (default) | x86_64
 #
 # Default output: infrastructure/scripts/build/api_lambda_real.zip
 
@@ -31,7 +39,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 OUT_ZIP="${1:-${SCRIPT_DIR}/build/api_lambda_real.zip}"
+ARCH="${2:-arm64}"
 BUILD_DIR="$(dirname "${OUT_ZIP}")/api_lambda_src"
+
+case "${ARCH}" in
+  arm64)  MANYLINUX_PLATFORM="manylinux2014_aarch64" ;;
+  x86_64) MANYLINUX_PLATFORM="manylinux2014_x86_64" ;;
+  *) echo "error: unsupported arch '${ARCH}' -- use arm64 or x86_64" >&2; exit 1 ;;
+esac
 
 API_SRC="${REPO_ROOT}/services/api/src/api"
 CORE_PY_SRC="${REPO_ROOT}/packages/core_py/src/core_py"
@@ -58,9 +73,9 @@ echo "==> Copying packages/core_py/src/core_py (read-only source, not modified)"
 cp -r "${CORE_PY_SRC}" "${BUILD_DIR}/core_py"
 find "${BUILD_DIR}/core_py" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-echo "==> Installing third-party dependencies (pydantic, boto3) as linux/arm64, cp314 wheels"
+echo "==> Installing third-party dependencies (pydantic, boto3) as linux/${ARCH}, cp314 wheels"
 python3 -m pip install \
-  --platform manylinux2014_aarch64 \
+  --platform "${MANYLINUX_PLATFORM}" \
   --implementation cp \
   --python-version 3.14 \
   --only-binary=:all: \

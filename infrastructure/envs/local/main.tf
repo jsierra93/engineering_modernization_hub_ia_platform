@@ -53,6 +53,14 @@ module "api" {
   state_machine_arn       = module.orchestration.state_machine_arn
   lambda_package_zip_path = local.lambda_package_path
 
+  # Override the arm64 default: confirmed empirically (2026-09-25, via a
+  # direct boto3 invoke against a deployed function) that Floci runs Lambda
+  # containers as the Docker host's native architecture and does not
+  # cross-emulate arm64 -- an arm64 .so there fails to import with a
+  # misleading "No module named 'pydantic_core._pydantic_core'". Build with
+  # `infrastructure/scripts/build_lambda.sh <zip> x86_64` to match.
+  lambda_architectures = ["x86_64"]
+
   # The Lambda executes inside Floci's own Docker-backed Lambda runner, on
   # the bridge Docker network - NOT on this host's network namespace. From
   # inside that container, "localhost:4566" resolves to the container
