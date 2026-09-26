@@ -98,3 +98,39 @@ variable "cors_allow_origins" {
   type        = list(string)
   default     = ["*"]
 }
+
+variable "aws_region" {
+  description = "Region used to build the analysis model's foundation-model ARN for IAM scoping (Fase 4, task 4.4-tf)."
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "analysis_model_id" {
+  description = "Bedrock model ID resolved for ModelRole.ANALYSIS (core_py.bedrock_models) -- CLAUDE.md's one documented Bedrock exception, the objective->strategy resolver in services/api/resolver. The IAM policy is scoped to exactly this model ID, never bedrock:* across all models."
+  type        = string
+  default     = "anthropic.claude-haiku-4-5-20251001-v1:0"
+}
+
+variable "enable_jwt_authorizer" {
+  description = <<-EOT
+    Task 4.2-tf: require a valid Cognito JWT on every route. False in
+    envs/local (Cognito's control-plane support on Floci is unconfirmed,
+    same reasoning as agent-phase's create_guardrail) -- local testing
+    keeps using handler.py's x-requested-by header fallback instead. True
+    in envs/personal, backed by the identity module's real user pool.
+  EOT
+  type    = bool
+  default = false
+}
+
+variable "jwt_issuer" {
+  description = "Cognito user pool issuer URL (module.identity.issuer_url). Required when enable_jwt_authorizer is true."
+  type        = string
+  default     = null
+}
+
+variable "jwt_audience" {
+  description = "Accepted JWT audiences -- the Cognito app client ids (cli and backstage) from the identity module. Required when enable_jwt_authorizer is true."
+  type        = list(string)
+  default     = []
+}

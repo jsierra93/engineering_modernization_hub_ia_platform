@@ -25,7 +25,14 @@ locals {
   use_prebuilt_zip   = var.lambda_package_zip_path != null
   lambda_filename    = local.use_prebuilt_zip ? var.lambda_package_zip_path : data.archive_file.lambda_package[0].output_path
   lambda_source_hash = local.use_prebuilt_zip ? filebase64sha256(var.lambda_package_zip_path) : data.archive_file.lambda_package[0].output_base64sha256
+
+  # Fase 4, task 4.4-tf: the one documented Bedrock exception (see
+  # CLAUDE.md) -- scoped to exactly the ANALYSIS model create_run's
+  # resolver actually invokes, never bedrock:* across every model.
+  analysis_model_arn = "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}::foundation-model/${var.analysis_model_id}"
 }
+
+data "aws_partition" "current" {}
 
 data "archive_file" "lambda_package" {
   count = local.use_prebuilt_zip ? 0 : 1
@@ -69,6 +76,10 @@ data "aws_iam_policy_document" "api_lambda_scope" {
       "dynamodb:PutItem",
       "dynamodb:GetItem",
       "dynamodb:Query",
+      # UpdateItem: handle_approval's atomic conditional write
+      # (RunsTable.approve_or_reject, Fase 4 task 4.3) -- the one other
+      # write this Lambda ever performs on the runs table.
+      "dynamodb:UpdateItem",
     ]
     resources = [
       var.runs_table_arn,
@@ -81,6 +92,28 @@ data "aws_iam_policy_document" "api_lambda_scope" {
     effect    = "Allow"
     actions   = ["states:StartExecution"]
     resources = [var.state_machine_arn]
+  }
+
+  statement {
+    sid    = "CompleteApprovalCallback"
+    effect = "Allow"
+    # handle_approval (Fase 4, task 4.3) calls these against the task
+    # token AwaitApproval recorded -- Step Functions supports
+    # resource-level scoping for both actions to the state machine ARN
+    # itself, so this is not left at "*".
+    actions   = ["states:SendTaskSuccess", "states:SendTaskFailure"]
+    resources = [var.state_machine_arn]
+  }
+
+  statement {
+    sid    = "ResolveObjectiveToStrategy"
+    effect = "Allow"
+    # CLAUDE.md's one documented Bedrock exception (create_run's
+    # objective->strategy resolver, services/api/src/api/resolver.py).
+    # Scoped to exactly the ANALYSIS model -- this Lambda gets no other
+    # Bedrock permission, ever.
+    actions   = ["bedrock:InvokeModel"]
+    resources = [local.analysis_model_arn]
   }
 }
 
@@ -155,12 +188,31 @@ resource "aws_apigatewayv2_integration" "api_lambda" {
   payload_format_version = "2.0"
 }
 
+# Task 4.2-tf. JWT authorizer over every route -- api's own
+# _requested_by() already reads requestContext.authorizer.jwt.claims.sub
+# first (falling back to an x-requested-by header only when no authorizer
+# ran), so no Python change was needed once this is wired in.
+resource "aws_apigatewayv2_authorizer" "jwt" {
+  count = var.enable_jwt_authorizer ? 1 : 0
+
+  api_id           = aws_apigatewayv2_api.http_api.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "${var.name_prefix}-jwt-authorizer"
+
+  jwt_configuration {
+    audience = var.jwt_audience
+    issuer   = var.jwt_issuer
+  }
+}
+
 resource "aws_apigatewayv2_route" "create_run" {
   api_id    = aws_apigatewayv2_api.http_api.id
   route_key = "POST /modhub/v1/runs"
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 
-  # No authorizer yet - JWT authorizer is Fase 4 task 4.2-tf.
+  authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
+  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
 }
 
 resource "aws_apigatewayv2_route" "get_run" {
@@ -168,7 +220,26 @@ resource "aws_apigatewayv2_route" "get_run" {
   route_key = "GET /modhub/v1/runs/{run_id}"
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 
-  # No authorizer yet - JWT authorizer is Fase 4 task 4.2-tf.
+  authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
+  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+}
+
+resource "aws_apigatewayv2_route" "list_runs" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "GET /modhub/v1/runs"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+
+  authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
+  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+}
+
+resource "aws_apigatewayv2_route" "approve_run" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "POST /modhub/v1/runs/{run_id}/approval"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+
+  authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
+  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
 }
 
 resource "aws_cloudwatch_log_group" "api_gateway_access_logs" {

@@ -64,3 +64,39 @@ variable "sandbox_assign_public_ip" {
   type        = bool
   default     = true
 }
+
+# --- FetchRepo wiring (task 2.2-tf integration, closing the 2.3 gap) ----
+# The FetchRepo state (see ./asl/state_machine.asl.json) is a real
+# arn:aws:states:::lambda:invoke integration against the fetch-repo
+# module's Lambda. Its response -- including workspace_get_url and
+# junit_put_url, the two presigned URLs that let the credential-less
+# sandbox read/write its own run -- flows into Baseline via $.phase_result.
+
+variable "fetch_repo_lambda_arn" {
+  description = "ARN of the fetch_repo Lambda (module fetch-repo, task 2.2-tf). The FetchRepo state's arn:aws:states:::lambda:invoke integration targets this, and the state machine's IAM role is granted lambda:InvokeFunction scoped to exactly this ARN -- never a wildcard across all functions."
+  type        = string
+}
+
+# --- agent_phase / core_ops wiring (Fase 3: 3.3-tf, 2.6-tf integration) -
+
+variable "agent_phase_lambda_arn" {
+  description = "ARN of the agent_phase Lambda (module agent-phase, task 3.3-tf). DiscoveryPlan, Implement and Fix states invoke this with a different `phase` in the payload each time -- same Lambda, per the design's own 'una fase por llamada'."
+  type        = string
+}
+
+variable "core_ops_lambda_arn" {
+  description = "ARN of the core_ops Lambda (module core-ops, task 2.6-tf). Invoked at every checkpoint (record_plan after DiscoveryPlan, compute_verdict after Baseline/Verify) -- never given a task token or any write path other than through this narrow, named-action interface."
+  type        = string
+}
+
+# --- Notifications wiring (Fase 4, task 4.3-tf) -------------------------
+
+variable "notifications_queue_arn" {
+  description = "ARN of the notifications module's SQS queue (task 4.3-tf). NotifyApprovalPending drops a message here the moment a run reaches AWAITING_APPROVAL -- Fase 5.4's approval bell reads from this same queue via modhub-backend's own scoped identity (task 5.2-tf), never this role's."
+  type        = string
+}
+
+variable "notifications_queue_url" {
+  description = "URL of the notifications module's SQS queue -- arn:aws:states:::sqs:sendMessage takes a QueueUrl, not an ARN."
+  type        = string
+}

@@ -22,3 +22,25 @@ output "api_endpoint" {
 output "lambda_function_name" {
   value = module.api.lambda_function_name
 }
+
+output "cognito_issuer_url" {
+  description = "Cognito JWT issuer for this env -- note it's Floci's own endpoint (http://localhost:4566/<pool_id>), not the real AWS hostname; see identity module's var.issuer_base_url."
+  value       = module.identity.issuer_url
+}
+
+output "cognito_cli_client_id" {
+  value = module.identity.cli_client_id
+}
+
+output "cognito_backstage_client_id" {
+  value = module.identity.backstage_client_id
+}
+
+output "cognito_backstage_client_secret" {
+  value     = module.identity.backstage_client_secret
+  sensitive = true
+}
+
+output "notifications_queue_url" {
+  value = module.notifications.queue_url
+}

@@ -22,7 +22,8 @@
 #   - logs:* (this file, 1.5-tf): write its own execution logs
 #   - ecs:RunTask + iam:PassRole, scoped to the sandbox task definition and
 #     its execution role only (this file, 2.3-tf)
-#   - lambda:InvokeFunction for fetch_repo / agent_phase / core_ops (2.2-tf, 3.3-tf, 2.6-tf) - NOT YET ADDED
+#   - lambda:InvokeFunction for fetch_repo (2.2-tf, this file) - added
+#   - lambda:InvokeFunction for agent_phase / core_ops (3.3-tf, 2.6-tf) - NOT YET ADDED
 #   - sqs:SendMessage to the notifications queue (4.3-tf) - NOT YET ADDED
 # It does NOT get DynamoDB or S3 permissions directly - those live behind
 # the Lambdas the state machine invokes, not on the state machine's own role.
@@ -42,6 +43,10 @@ locals {
     sandbox_subnet_ids          = jsonencode(var.sandbox_subnet_ids)
     sandbox_security_group_ids  = jsonencode(var.sandbox_security_group_ids)
     sandbox_assign_public_ip    = var.sandbox_assign_public_ip ? "ENABLED" : "DISABLED"
+    fetch_repo_lambda_arn       = var.fetch_repo_lambda_arn
+    agent_phase_lambda_arn      = var.agent_phase_lambda_arn
+    core_ops_lambda_arn         = var.core_ops_lambda_arn
+    notifications_queue_url    = var.notifications_queue_url
   })
 }
 
@@ -173,6 +178,66 @@ resource "aws_iam_role_policy" "sandbox_run_task" {
   name   = "${var.name_prefix}-orchestration-sandbox-run-task"
   role   = aws_iam_role.state_machine.id
   policy = data.aws_iam_policy_document.sandbox_run_task.json
+}
+
+# Task 2.2-tf integration: the FetchRepo state invokes exactly one Lambda.
+# No wildcard across functions -- this state machine can never invoke
+# anything but the specific fetch_repo function it was wired to.
+data "aws_iam_policy_document" "invoke_fetch_repo" {
+  statement {
+    sid       = "InvokeFetchRepoLambdaOnly"
+    effect    = "Allow"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [var.fetch_repo_lambda_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "invoke_fetch_repo" {
+  name   = "${var.name_prefix}-orchestration-invoke-fetch-repo"
+  role   = aws_iam_role.state_machine.id
+  policy = data.aws_iam_policy_document.invoke_fetch_repo.json
+}
+
+# Fase 3 integration: DiscoveryPlan/Implement/Fix invoke agent_phase;
+# CoreOps (and record_plan after DiscoveryPlan) invokes core_ops. Each
+# scoped to exactly one function ARN, same pattern as invoke_fetch_repo.
+data "aws_iam_policy_document" "invoke_agent_phase_and_core_ops" {
+  statement {
+    sid       = "InvokeAgentPhaseLambdaOnly"
+    effect    = "Allow"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [var.agent_phase_lambda_arn]
+  }
+
+  statement {
+    sid       = "InvokeCoreOpsLambdaOnly"
+    effect    = "Allow"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [var.core_ops_lambda_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "invoke_agent_phase_and_core_ops" {
+  name   = "${var.name_prefix}-orchestration-invoke-agent-phase-core-ops"
+  role   = aws_iam_role.state_machine.id
+  policy = data.aws_iam_policy_document.invoke_agent_phase_and_core_ops.json
+}
+
+# Task 4.3-tf: NotifyApprovalPending's arn:aws:states:::sqs:sendMessage
+# integration, scoped to exactly the one notifications queue.
+data "aws_iam_policy_document" "send_notification" {
+  statement {
+    sid       = "SendToNotificationsQueueOnly"
+    effect    = "Allow"
+    actions   = ["sqs:SendMessage"]
+    resources = [var.notifications_queue_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "send_notification" {
+  name   = "${var.name_prefix}-orchestration-send-notification"
+  role   = aws_iam_role.state_machine.id
+  policy = data.aws_iam_policy_document.send_notification.json
 }
 
 resource "aws_sfn_state_machine" "run" {

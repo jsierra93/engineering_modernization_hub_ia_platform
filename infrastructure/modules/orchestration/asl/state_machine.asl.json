@@ -1,21 +1,32 @@
 {
-  "Comment": "Engineering Modernization Hub - modernization run state machine. Most phases are still Pass-state stubs (Fase 1) that only record the phase name and a placeholder status update; real Lambda/ECS integrations arrive phase by phase in Fases 2-4 per PLAN.md. Baseline (task 2.3/2.3-tf) is the first real integration: a genuine arn:aws:states:::ecs:runTask.sync against the sandbox-network Terraform module. This file is rendered through Terraform's templatefile() (see ../main.tf) - the ${...} placeholders in the Baseline state are substituted with real ARNs/IDs at plan/apply time, they are not literal JSON values.",
+  "Comment": "Engineering Modernization Hub - modernization run state machine. Rendered through Terraform's templatefile() (see ../main.tf) - single-dollar $${...} placeholders (FunctionName/Cluster/TaskDefinition/Subnets/SecurityGroups/AssignPublicIp/Name) are substituted with real ARNs/IDs at plan/apply time; a literal placeholder-looking string appearing only in prose (like this sentence) must instead be double-dollar-escaped so templatefile doesn't try to interpolate it -- learned the hard way, 2026-09-26: terraform validate doesn't fully evaluate templatefile(), only plan/apply does, and an early draft of this file had the two backwards, escaping the REAL placeholders (so they rendered as literal, un-substituted text) instead of the prose. AwaitApproval's core_ops_lambda_arn target is real and wired (task 4.3); Cognito-backed auth in front of the API that calls it is the one remaining Fase-4 gap. Each Task uses its OWN ResultPath (never a shared $.phase_result) so nothing gets clobbered across a chain this long -- Step Functions merges ResultPath additively, so the initial input's run_id/repo/commit/objetivo/strategy_id/max_iterations/iteration survive to the very end automatically. Implement and every Fix iteration deliberately share the SAME ResultPath ($.implement_result) -- there is never a need to distinguish 'the original Implement output' from 'the latest Fix output' downstream, only 'the current workspace state', so reusing one key avoids ASL's lack of a graceful coalesce for a path that may not exist yet (an early design used States.Array/ArrayGetItem to pick between $.fix_result and $.implement_result and it breaks on the very first Verify pass, before any $.fix_result exists -- caught before ever applying it, not in production).",
   "StartAt": "FetchRepo",
   "States": {
     "FetchRepo": {
-      "Type": "Pass",
-      "Comment": "Fase 2 (2.2/2.2-tf): becomes a Task invoking lambda fetch_repo, which downloads the tarball at the requested SHA and writes ws/v0 to S3.",
+      "Type": "Task",
+      "Comment": "Task 2.2-tf. Downloads the tarball at the requested SHA, sanitizes it, writes ws/v0 to S3 (per-file plus one consolidated ws/v0.tar.gz), and returns two presigned URLs -- workspace_get_url and junit_put_url -- since the sandbox has no AWS credentials of any kind (CLAUDE.md invariant #8).",
+      "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "run_id.$": "$.run_id",
-        "phase": "FETCH_REPO",
-        "status": "FETCH_REPO"
+        "FunctionName": "${fetch_repo_lambda_arn}",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "repo.$": "$.repo",
+          "commit.$": "$.commit"
+        }
       },
-      "ResultPath": "$.phase_result",
+      "ResultSelector": {
+        "bucket.$": "$.Payload.bucket",
+        "workspace_get_url.$": "$.Payload.workspace_get_url",
+        "junit_put_url.$": "$.Payload.junit_put_url",
+        "junit_key.$": "$.Payload.junit_key"
+      },
+      "ResultPath": "$.fetch_repo_result",
       "Next": "Baseline"
     },
+
     "Baseline": {
       "Type": "Task",
-      "Comment": "Task 2.3/2.3-tf. Real ECS RunTask.sync against the sandbox-network module's Fargate task definition, running the unit_tests check against ws/v0 - baseline only confirms the repo's own tests pass before any change is made (PLAN.md 2.3: 'baseline solo confirma que los tests propios del repo pasan antes de cualquier cambio'). The sandbox task definition bakes in NO environment variables (CLAUDE.md invariant #8), so check-specific input is supplied here, at invocation time, via ContainerOverrides only. ASSUMPTION - FLAGGED, depends on a parallel task's output not yet available when this was authored (no sandbox/entrypoint.py or sandbox/README.md existed in the repo at authoring time): the sandbox image's entrypoint (1) selects which check to run from a CHECK_NAME environment variable, and (2) reads/writes its workspace and JUnit result via presigned S3 URLs (never AWS credentials - the sandbox has none) passed as the WORKSPACE_GET_URL and JUNIT_PUT_URL environment variables. Those two URLs are assumed to be produced by the FetchRepo phase and threaded through as $.phase_result.workspace_get_url / $.phase_result.junit_put_url (FetchRepo's own ResultPath is $.phase_result, so this is the first field Baseline can read). If the real sandbox entrypoint expects a different contract (e.g. a command override instead of env vars, or a different field path for the URLs), only this state's Parameters.Overrides needs to change to match - nothing else in this state machine depends on the exact shape.",
+      "Comment": "Task 2.3/2.3-tf. Real ECS RunTask.sync running unit_tests against ws/v0, before any change is made. A non-zero container exit makes the .sync integration fail the STATE itself (confirmed empirically, 2026-09-26, against octocat/Hello-World -- Step Functions does not return a successful result with the exit code embedded for a Choice state to inspect) -- Catch routes that to a graceful BLOQUEADO verdict instead of an ugly execution failure.",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
@@ -32,76 +43,266 @@
           "ContainerOverrides": [
             {
               "Name": "${sandbox_container_name}",
+              "Command": ["unit_tests"],
               "Environment": [
-                { "Name": "CHECK_NAME", "Value": "unit_tests" },
-                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.phase_result.workspace_get_url" },
-                { "Name": "JUNIT_PUT_URL", "Value.$": "$.phase_result.junit_put_url" }
+                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.fetch_repo_result.workspace_get_url" },
+                { "Name": "JUNIT_PUT_URL", "Value.$": "$.fetch_repo_result.junit_put_url" }
               ]
             }
           ]
         }
       },
-      "ResultPath": "$.phase_result",
+      "ResultPath": "$.baseline_result",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.baseline_error",
+          "Next": "RecordBaselineBlocked"
+        }
+      ],
       "Next": "DiscoveryPlan"
     },
-    "DiscoveryPlan": {
-      "Type": "Pass",
-      "Comment": "Fase 3 (3.3-tf/3.4): becomes a Task invoking lambda agent_phase (Strands + Bedrock Haiku) for discovery, impact analysis and plan; computes plan_hash.",
-      "Parameters": {
-        "run_id.$": "$.run_id",
-        "phase": "DISCOVERY_PLAN",
-        "status": "DISCOVERY_PLAN"
-      },
-      "ResultPath": "$.phase_result",
-      "Next": "AwaitApproval"
-    },
-    "AwaitApproval": {
+
+    "RecordBaselineBlocked": {
       "Type": "Task",
-      "Comment": "PLACEHOLDER ARN. Fase 4 (4.3): becomes a real callback integration using arn:aws:states:::lambda:invoke.waitForTaskToken, paused until POST /runs/{id}/approval performs the conditional write (sub = requested_by, state = AWAITING_APPROVAL, plan_hash match, recent auth) and calls SendTaskSuccess/SendTaskFailure. Today this Resource ARN does not exist and this state is never actually executed end-to-end.",
-      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Comment": "The repo's own tests don't pass before any change -- CLAUDE.md/the design: this is BLOQUEADO, never FALLIDO_CONTROLADO. baseline_failed=true short-circuits evaluate_verdict at rule 2, ahead of the suite-integrity/checks logic that would otherwise apply.",
+      "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "FunctionName": "arn:aws:lambda:REGION:ACCOUNT_ID:function:PLACEHOLDER-await-approval",
+        "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
+          "action": "compute_verdict",
           "run_id.$": "$.run_id",
-          "phase": "AWAITING_APPROVAL",
-          "status": "AWAITING_APPROVAL",
-          "TaskToken.$": "$$.Task.Token"
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.fetch_repo_result.junit_key",
+          "baseline_failed": true,
+          "checks": {}
         }
       },
-      "ResultPath": "$.phase_result",
+      "ResultPath": "$.verdict_result",
+      "End": true
+    },
+
+    "DiscoveryPlan": {
+      "Type": "Task",
+      "Comment": "Fase 3 (3.3-tf/3.4). Strands + Bedrock Haiku (ModelRole.ANALYSIS). Explores ws/v0, consults docs via fetch_doc, produces a structured DiscoveryPlan. No write_file tool at all for this phase (agent_phase.tools/build_agent's include_write_tool=False) -- it never touches the workspace.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${agent_phase_lambda_arn}",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "phase": "discovery_plan",
+          "strategy_id.$": "$.strategy_id",
+          "objetivo.$": "$.objetivo"
+        }
+      },
+      "ResultSelector": {
+        "plan.$": "$.Payload.result"
+      },
+      "ResultPath": "$.discovery_plan_result",
+      "Next": "RecordPlan"
+    },
+
+    "RecordPlan": {
+      "Type": "Task",
+      "Comment": "Task 2.5/2.6-tf integration. plan_hash is computed HERE, by core_ops -- never by the model that proposed the plan (CLAUDE.md: a model asked to compute its own hash could simply be asked to lie about it).",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "record_plan",
+          "run_id.$": "$.run_id",
+          "plan.$": "$.discovery_plan_result.plan"
+        }
+      },
+      "ResultPath": "$.record_plan_result",
+      "Next": "NotifyApprovalPending"
+    },
+
+    "NotifyApprovalPending": {
+      "Type": "Task",
+      "Comment": "Task 4.3-tf/4.3. The run just moved to AWAITING_APPROVAL (RecordPlan) -- drop a message on the notifications queue here so Fase 5.4's Backstage bell (via modhub-backend's own scoped SQS identity, task 5.2-tf) can surface it without polling the API. Best-effort by design: the Catch below means a failed send can never block the run itself from reaching approval -- a human can still approve via the API even if this one notification is lost.",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${notifications_queue_url}",
+        "MessageBody": {
+          "event_type": "AWAITING_APPROVAL",
+          "run_id.$": "$.run_id",
+          "plan_hash.$": "$.record_plan_result.plan_hash"
+        }
+      },
+      "ResultPath": "$.notify_result",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.notify_error",
+          "Next": "AwaitApproval"
+        }
+      ],
+      "Next": "AwaitApproval"
+    },
+
+    "AwaitApproval": {
+      "Type": "Task",
+      "Comment": "Fase 4 (4.3), wired. arn:aws:states:::lambda:invoke.waitForTaskToken calls core_ops's record_task_token action, which persists $$.Task.Token onto the Run and returns immediately -- but this state does NOT complete until a much later, separate invocation of POST /runs/{id}/approval (services/api's handle_approval) performs its own conditional write (sub = requested_by, state = AWAITING_APPROVAL, plan_hash match) and calls SendTaskSuccess/SendTaskFailure against that stored token. A rejection (SendTaskFailure) fails this state -- there is deliberately no Catch here: an execution ending in the Step Functions console as FAILED for an operator-rejected plan is the correct, visible signal, distinct from CANCELADO already being recorded on the Run itself by handle_approval.",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "record_task_token",
+          "run_id.$": "$.run_id",
+          "task_token.$": "$$.Task.Token"
+        }
+      },
+      "ResultPath": "$.approval_result",
       "Next": "Implement"
     },
+
     "Implement": {
-      "Type": "Pass",
-      "Comment": "Fase 3 (3.8): becomes a Task invoking lambda agent_phase (Strands + Bedrock Sonnet) writing code/tests within writable_paths, through the policy gate.",
+      "Type": "Task",
+      "Comment": "Fase 3 (3.8). Strands + Bedrock Sonnet (ModelRole.CODE), writing only within the approved plan's writable_paths (policy gate enforced). Repackages the workspace afterward (agent_phase.sandbox_handoff) so Verify gets a fresh presigned GET reflecting what was actually written. ResultPath $.implement_result is intentionally reused by Fix below -- see the top-level Comment.",
+      "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "run_id.$": "$.run_id",
-        "phase": "IMPLEMENT",
-        "status": "IMPLEMENT"
+        "FunctionName": "${agent_phase_lambda_arn}",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "phase": "implement",
+          "strategy_id.$": "$.strategy_id",
+          "plan.$": "$.discovery_plan_result.plan"
+        }
       },
-      "ResultPath": "$.phase_result",
+      "ResultSelector": {
+        "workspace_get_url.$": "$.Payload.workspace_get_url",
+        "junit_put_url.$": "$.Payload.junit_put_url",
+        "junit_key.$": "$.Payload.junit_key",
+        "bucket.$": "$.Payload.bucket"
+      },
+      "ResultPath": "$.implement_result",
       "Next": "Verify"
     },
+
     "Verify": {
-      "Type": "Pass",
-      "Comment": "Fase 2/3 (2.3-tf sandbox + 3.8 fix loop): becomes a Task running the sandbox checks (install/unit_tests/lint) and, on failure, looping back to Implement up to max_iterations.",
+      "Type": "Task",
+      "Comment": "Task 2.3-tf's sandbox, reused for the fix loop (Fase 3.8). Same Catch pattern as Baseline: a failing check fails this state, routed to CheckIterations rather than the execution dying. Always reads from $.implement_result -- populated by Implement on the first pass, overwritten by Fix on every loop iteration after (see top-level Comment).",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
-        "run_id.$": "$.run_id",
-        "phase": "VERIFY",
-        "status": "VERIFY"
+        "Cluster": "${sandbox_cluster_arn}",
+        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ${sandbox_subnet_ids},
+            "SecurityGroups": ${sandbox_security_group_ids},
+            "AssignPublicIp": "${sandbox_assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${sandbox_container_name}",
+              "Command": ["unit_tests"],
+              "Environment": [
+                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.implement_result.workspace_get_url" },
+                { "Name": "JUNIT_PUT_URL", "Value.$": "$.implement_result.junit_put_url" }
+              ]
+            }
+          ]
+        }
       },
-      "ResultPath": "$.phase_result",
-      "Next": "CoreOps"
+      "ResultPath": "$.verify_result",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verify_error",
+          "Next": "CheckIterations"
+        }
+      ],
+      "Next": "ComputeFinalVerdict"
     },
-    "CoreOps": {
-      "Type": "Pass",
-      "Comment": "Fase 2 (2.5/2.6-tf): becomes a Task invoking lambda core_ops, which computes the final verdict from real JUnit only - never from model output (CLAUDE.md invariant #1).",
+
+    "CheckIterations": {
+      "Type": "Choice",
+      "Comment": "CLAUDE.md's fix loop bound: at most max_iterations corrections, never model-decided.",
+      "Choices": [
+        {
+          "Variable": "$.iteration",
+          "NumericLessThanPath": "$.max_iterations",
+          "Next": "Fix"
+        }
+      ],
+      "Default": "ComputeExhaustedVerdict"
+    },
+
+    "Fix": {
+      "Type": "Task",
+      "Comment": "Fase 3 (3.8) fix loop. Reads the real JUnit failure from S3 (agent_phase has real, scoped S3 access; the sandbox that produced it does not) and proposes a correction, applied through the same write_file tool and policy gate as Implement. ResultPath deliberately matches Implement's -- see top-level Comment.",
+      "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
-        "run_id.$": "$.run_id",
-        "phase": "CORE_OPS",
-        "status": "CORE_OPS"
+        "FunctionName": "${agent_phase_lambda_arn}",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "phase": "fix",
+          "strategy_id.$": "$.strategy_id",
+          "junit_key.$": "$.implement_result.junit_key",
+          "iteration.$": "$.iteration",
+          "max_iterations.$": "$.max_iterations"
+        }
       },
-      "ResultPath": "$.phase_result",
+      "ResultSelector": {
+        "workspace_get_url.$": "$.Payload.workspace_get_url",
+        "junit_put_url.$": "$.Payload.junit_put_url",
+        "junit_key.$": "$.Payload.junit_key",
+        "bucket.$": "$.Payload.bucket"
+      },
+      "ResultPath": "$.implement_result",
+      "Next": "IncrementIteration"
+    },
+
+    "IncrementIteration": {
+      "Type": "Pass",
+      "Parameters": {
+        "iteration.$": "States.MathAdd($.iteration, 1)"
+      },
+      "ResultPath": "$.iteration",
+      "Next": "Verify"
+    },
+
+    "ComputeExhaustedVerdict": {
+      "Type": "Task",
+      "Comment": "max_iterations reached without a passing Verify -- FALLIDO_CONTROLADO via evaluate_verdict's fix_iterations_exhausted_without_pass flag.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.implement_result.junit_key",
+          "fix_iterations_exhausted_without_pass": true,
+          "checks": { "install": true, "unit_tests": false }
+        }
+      },
+      "ResultPath": "$.verdict_result",
+      "End": true
+    },
+
+    "ComputeFinalVerdict": {
+      "Type": "Task",
+      "Comment": "Verify succeeded (no Catch fired) -- install/unit_tests both pass by construction. check_suite_integrity (via core_ops comparing baseline vs. this final JUnit) is what can still turn this into FALLIDO_CONTROLADO despite a green run, per CLAUDE.md invariant #2.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.implement_result.junit_key",
+          "checks": { "install": true, "unit_tests": true, "lint": true }
+        }
+      },
+      "ResultPath": "$.verdict_result",
       "End": true
     }
   }

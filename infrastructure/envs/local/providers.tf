@@ -59,5 +59,25 @@ provider "aws" {
     ecr            = var.floci_endpoint
     secretsmanager = var.floci_endpoint
     events         = var.floci_endpoint
+    # ec2 was missing entirely (not just unconfirmed) -- without it, the
+    # sandbox-network module's VPC/subnet/security-group calls silently
+    # fell through to the real AWS endpoint and failed with a real 401
+    # AuthFailure against the fake test/test credentials. Confirmed via a
+    # live `terraform apply`, 2026-09-26 -- not a hypothetical.
+    ec2 = var.floci_endpoint
+    # sqs was likewise missing -- added for the notifications module
+    # (4.3-tf). Confirmed via a live `terraform apply`, 2026-09-26: without
+    # it, aws_sqs_queue.dlq's CreateQueue call fell through to the real AWS
+    # endpoint and failed with InvalidClientTokenId against the fake
+    # test/test credentials -- the exact same failure mode as the ec2
+    # omission above, not a coincidence.
+    sqs = var.floci_endpoint
+    # cognitoidp/cognitoidentity: Floci's own service list (floci.io/aws)
+    # marks Cognito with a star as one of the services exclusive to Floci
+    # among free AWS emulators -- confirmed via the site itself,
+    # 2026-09-26, correcting an earlier assumption in this file that
+    # treated it as unconfirmed the same way ECS/ECR/Secrets Manager were.
+    cognitoidp       = var.floci_endpoint
+    cognitoidentity  = var.floci_endpoint
   }
 }

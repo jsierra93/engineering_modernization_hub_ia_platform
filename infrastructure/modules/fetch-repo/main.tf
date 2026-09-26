@@ -132,7 +132,12 @@ resource "aws_lambda_function" "fetch_repo" {
   environment {
     variables = merge(
       {
-        WORKSPACES_BUCKET_NAME  = var.workspaces_bucket_name
+        # Name matches fetch_repo.handler.DEFAULT_WORKSPACE_BUCKET_ENV
+        # exactly -- confirmed via a live Step Functions execution against
+        # Floci, 2026-09-26, after this name (previously
+        # WORKSPACES_BUCKET_NAME, a guess made before the Python side's
+        # real handler.py existed) caused a real KeyError in production.
+        MODHUB_WORKSPACE_BUCKET = var.workspaces_bucket_name
         GITHUB_TOKEN_SECRET_ARN = aws_secretsmanager_secret.github_token.arn
       },
       var.extra_environment_variables
