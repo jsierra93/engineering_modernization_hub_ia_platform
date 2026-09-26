@@ -1,0 +1,88 @@
+{
+  "Comment": "Engineering Modernization Hub - modernization run state machine (Fase 1 stub). Each phase is a Pass state that only records the phase name and a placeholder status update; real Lambda integrations arrive phase by phase in Fases 2-4 per PLAN.md.",
+  "StartAt": "FetchRepo",
+  "States": {
+    "FetchRepo": {
+      "Type": "Pass",
+      "Comment": "Fase 2 (2.2/2.2-tf): becomes a Task invoking lambda fetch_repo, which downloads the tarball at the requested SHA and writes ws/v0 to S3.",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "phase": "FETCH_REPO",
+        "status": "FETCH_REPO"
+      },
+      "ResultPath": "$.phase_result",
+      "Next": "Baseline"
+    },
+    "Baseline": {
+      "Type": "Pass",
+      "Comment": "Fase 2 (2.3/2.3-tf): becomes a Task running the Fargate sandbox against ws/v0 to produce the baseline JUnit, persisted to S3.",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "phase": "BASELINE",
+        "status": "BASELINE"
+      },
+      "ResultPath": "$.phase_result",
+      "Next": "DiscoveryPlan"
+    },
+    "DiscoveryPlan": {
+      "Type": "Pass",
+      "Comment": "Fase 3 (3.3-tf/3.4): becomes a Task invoking lambda agent_phase (Strands + Bedrock Haiku) for discovery, impact analysis and plan; computes plan_hash.",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "phase": "DISCOVERY_PLAN",
+        "status": "DISCOVERY_PLAN"
+      },
+      "ResultPath": "$.phase_result",
+      "Next": "AwaitApproval"
+    },
+    "AwaitApproval": {
+      "Type": "Task",
+      "Comment": "PLACEHOLDER ARN. Fase 4 (4.3): becomes a real callback integration using arn:aws:states:::lambda:invoke.waitForTaskToken, paused until POST /runs/{id}/approval performs the conditional write (sub = requested_by, state = AWAITING_APPROVAL, plan_hash match, recent auth) and calls SendTaskSuccess/SendTaskFailure. Today this Resource ARN does not exist and this state is never actually executed end-to-end.",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "arn:aws:lambda:REGION:ACCOUNT_ID:function:PLACEHOLDER-await-approval",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "phase": "AWAITING_APPROVAL",
+          "status": "AWAITING_APPROVAL",
+          "TaskToken.$": "$$.Task.Token"
+        }
+      },
+      "ResultPath": "$.phase_result",
+      "Next": "Implement"
+    },
+    "Implement": {
+      "Type": "Pass",
+      "Comment": "Fase 3 (3.8): becomes a Task invoking lambda agent_phase (Strands + Bedrock Sonnet) writing code/tests within writable_paths, through the policy gate.",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "phase": "IMPLEMENT",
+        "status": "IMPLEMENT"
+      },
+      "ResultPath": "$.phase_result",
+      "Next": "Verify"
+    },
+    "Verify": {
+      "Type": "Pass",
+      "Comment": "Fase 2/3 (2.3-tf sandbox + 3.8 fix loop): becomes a Task running the sandbox checks (install/unit_tests/lint) and, on failure, looping back to Implement up to max_iterations.",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "phase": "VERIFY",
+        "status": "VERIFY"
+      },
+      "ResultPath": "$.phase_result",
+      "Next": "CoreOps"
+    },
+    "CoreOps": {
+      "Type": "Pass",
+      "Comment": "Fase 2 (2.5/2.6-tf): becomes a Task invoking lambda core_ops, which computes the final verdict from real JUnit only - never from model output (CLAUDE.md invariant #1).",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "phase": "CORE_OPS",
+        "status": "CORE_OPS"
+      },
+      "ResultPath": "$.phase_result",
+      "End": true
+    }
+  }
+}
