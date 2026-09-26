@@ -9,30 +9,134 @@ positional argument — one of a small, hardcoded allowlist of check
 names — and refuses anything else. There is no way to pass an arbitrary
 command through this entrypoint.
 
-I/O contract (the only interface this container has with the outside
-world — no AWS SDK, no network calls other than package installation):
-  /workspace  — the project to check (read/write; `install` writes
-                packages here, `unit_tests`/`lint` write minor bytecode
-                cache; the actual source is not modified by any check).
-  /output     — where this script writes its results. Always written,
-                whether the check passes or fails, so the caller can
-                inspect what happened even after a non-zero exit.
+I/O contract — two supported modes, chosen at run time by whether the
+WORKSPACE_GET_URL/JUNIT_PUT_URL env vars are set:
+
+  Local mount mode (no env vars set): /workspace and /output are
+  read/write bind mounts the caller set up. This is the mode used for
+  everything in this file's own README/fixture-based verification.
+
+  Presigned-URL mode (CLAUDE.md invariant #8: "access to its own run
+  only through presigned URLs"): still no AWS SDK, no AWS credentials,
+  ever — a presigned URL is a plain HTTPS GET/PUT that happens to carry
+  a one-time-use signature in its query string, nothing more. If
+  WORKSPACE_GET_URL is set, this script downloads that URL (a single
+  tar.gz, built by fetch_repo — a presigned URL only ever names one S3
+  object, and the workspace is many files, hence one consolidated
+  archive) and extracts it into /workspace before running the check,
+  using the same tar-slip protections as `fetch_repo.sanitize` (this
+  image has no dependency on that package, so the check is duplicated
+  here, deliberately conservative, rather than trusting an archive that
+  already passed through one sanitization pass upstream). If
+  JUNIT_PUT_URL is set and /output/junit.xml exists after the check
+  runs, it's PUT to that URL. Uses only the standard library
+  (`urllib.request`) — no `requests`, to keep this image's dependency
+  surface minimal (it already has zero AWS SDK; no reason to add an HTTP
+  client dependency either).
 
 Exit code contract:
   0   the check passed
   1   the check ran and failed (e.g. a test failed, lint found issues)
   2   usage/configuration error (unknown check name, missing workspace,
-      etc.) — never confused with "the check ran and failed"
+      a presigned URL fetch/push failure, etc.) — never confused with
+      "the check ran and failed"
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+import tarfile
+import urllib.request
 from pathlib import Path
 
 WORKSPACE = Path("/workspace")
 OUTPUT = Path("/output")
+
+WORKSPACE_GET_URL_ENV = "WORKSPACE_GET_URL"
+JUNIT_PUT_URL_ENV = "JUNIT_PUT_URL"
+
+# Same limits as fetch_repo.sanitize, duplicated rather than shared (this
+# image has no dependency on that package -- see module docstring).
+MAX_TOTAL_UNCOMPRESSED_BYTES = 300 * 1024 * 1024
+MAX_SINGLE_FILE_BYTES = 50 * 1024 * 1024
+
+
+class WorkspaceFetchError(Exception):
+    """Downloading or safely extracting WORKSPACE_GET_URL failed."""
+
+
+def _is_within_root(candidate: str) -> bool:
+    if candidate.startswith("/") or candidate.startswith("\\"):
+        return False
+    if len(candidate) >= 2 and candidate[1] == ":":
+        return False
+    depth = 0
+    for part in candidate.replace("\\", "/").split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            depth -= 1
+            if depth < 0:
+                return False
+        else:
+            depth += 1
+    return True
+
+
+def fetch_workspace(url: str) -> None:
+    """Download the consolidated workspace archive and extract it into
+    /workspace, with the same tar-slip protections fetch_repo already
+    applied once upstream (belt and suspenders: this image never trusts
+    an archive just because it arrived over a presigned URL)."""
+
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310 - fixed https presigned URL, not user input
+            archive_bytes = resp.read()
+    except Exception as exc:  # noqa: BLE001 - re-raised as our own type
+        raise WorkspaceFetchError(f"failed to download workspace: {exc}") from exc
+
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
+    total_bytes = 0
+    try:
+        import io
+
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+            for member in archive:
+                if member.issym() or member.islnk() or member.isdev():
+                    raise WorkspaceFetchError(f"rejected archive member {member.name!r}: not a regular file")
+                if not (member.isfile() or member.isdir()):
+                    raise WorkspaceFetchError(f"rejected archive member {member.name!r}: unsupported type")
+                if not _is_within_root(member.name):
+                    raise WorkspaceFetchError(f"rejected archive member {member.name!r}: escapes extraction root")
+                if member.isdir():
+                    continue
+                if member.size > MAX_SINGLE_FILE_BYTES:
+                    raise WorkspaceFetchError(f"rejected archive member {member.name!r}: too large")
+                total_bytes += member.size
+                if total_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                    raise WorkspaceFetchError("workspace archive exceeds the total decompressed size limit")
+                archive.extract(member, path=WORKSPACE, filter="data")
+    except tarfile.TarError as exc:
+        raise WorkspaceFetchError(f"workspace archive is not a valid tar.gz: {exc}") from exc
+
+
+def push_junit(url: str) -> None:
+    """PUT /output/junit.xml to a presigned URL, if it exists. Silent
+    no-op if the check that ran doesn't produce one (e.g. `lint`) --
+    this is called unconditionally after every check."""
+
+    junit_path = OUTPUT / "junit.xml"
+    if not junit_path.exists():
+        return
+
+    data = junit_path.read_bytes()
+    request = urllib.request.Request(url, data=data, method="PUT")
+    try:
+        with urllib.request.urlopen(request, timeout=60):  # noqa: S310 - fixed https presigned URL
+            pass
+    except Exception as exc:  # noqa: BLE001 - re-raised as our own type
+        raise WorkspaceFetchError(f"failed to push {junit_path} to presigned URL: {exc}") from exc
 
 # The complete, closed set of checks this image will ever run. Adding a
 # check means editing this file and rebuilding the image — it is never
@@ -168,6 +272,8 @@ CHECKS = {
 
 
 def main(argv: list[str]) -> int:
+    import os
+
     OUTPUT.mkdir(parents=True, exist_ok=True)
 
     if len(argv) != 1:
@@ -187,11 +293,33 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
+    workspace_get_url = os.environ.get(WORKSPACE_GET_URL_ENV)
+    if workspace_get_url:
+        try:
+            fetch_workspace(workspace_get_url)
+        except WorkspaceFetchError as exc:
+            sys.stderr.write(f"workspace fetch failed: {exc}\n")
+            return 2
+
     if not WORKSPACE.exists() or not any(WORKSPACE.iterdir()):
         sys.stderr.write(f"/workspace is missing or empty; nothing to check\n")
         return 2
 
-    return CHECKS[name]()
+    exit_code = CHECKS[name]()
+
+    junit_put_url = os.environ.get(JUNIT_PUT_URL_ENV)
+    if junit_put_url:
+        try:
+            push_junit(junit_put_url)
+        except WorkspaceFetchError as exc:
+            # The check itself already ran and produced a real result --
+            # a failure to push it is reported, but must not overwrite a
+            # genuine pass (0) with a misleading usage error (2), nor
+            # hide a genuine failure (1) behind "looks fine, exit 0".
+            sys.stderr.write(f"junit push failed: {exc}\n")
+            return exit_code or 2
+
+    return exit_code
 
 
 if __name__ == "__main__":
