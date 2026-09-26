@@ -9,7 +9,7 @@ import pytest
 from moto import mock_aws
 
 from core_py.models import Event, Run
-from core_py.persistence import EventsTable, RunsTable, create_tables
+from core_py.persistence import BudgetExceededError, EventsTable, RunsTable, create_tables
 
 
 @pytest.fixture()
@@ -96,3 +96,33 @@ def test_events_append_and_query_by_run_id(tables):
 
     assert [e.seq for e in results] == [0, 1]
     assert [e.type for e in results] == ["RunCreated", "PhaseStarted"]
+
+
+def test_add_spend_accumulates_within_budget(tables):
+    runs_table, _ = tables
+    run = _make_run(max_usd=5.0)
+    runs_table.put(run)
+
+    runs_table.add_spend(run.run_id, 2.0, max_usd=5.0)
+    runs_table.add_spend(run.run_id, 2.0, max_usd=5.0)
+
+    fetched = runs_table.get(run.run_id)
+    assert fetched.spent_usd == pytest.approx(4.0)
+
+
+def test_add_spend_second_call_that_would_exceed_max_usd_raises(tables):
+    """Task 2.6: two sequential adds that together would exceed max_usd --
+    the second must fail (a specific, catchable exception) rather than
+    silently over-committing."""
+    runs_table, _ = tables
+    run = _make_run(max_usd=5.0)
+    runs_table.put(run)
+
+    runs_table.add_spend(run.run_id, 4.0, max_usd=5.0)
+
+    with pytest.raises(BudgetExceededError):
+        runs_table.add_spend(run.run_id, 2.0, max_usd=5.0)
+
+    # The rejected call must not have partially applied.
+    fetched = runs_table.get(run.run_id)
+    assert fetched.spent_usd == pytest.approx(4.0)

@@ -3,7 +3,12 @@ name = "core-ops"
 version = "0.1.0"
 description = "lambda core_ops -- verdict, budget, scope (never imports a Bedrock client)"
 requires-python = ">=3.14,<3.15"
-dependencies = []
+dependencies = [
+    "core-py",
+]
+
+[tool.uv.sources]
+core-py = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

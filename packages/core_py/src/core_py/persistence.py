@@ -21,8 +21,16 @@ from typing import Any
 
 import boto3
 import boto3.dynamodb.conditions as conditions
+from botocore.exceptions import ClientError
 
 from core_py.models import Event, Run
+
+
+class BudgetExceededError(Exception):
+    """Raised by `RunsTable.add_spend` when applying a spend delta would
+    push `spent_usd` past `max_usd`. Distinct from a generic
+    `ClientError` so callers can catch exactly this and route the run to
+    `PRESUPUESTO_AGOTADO` instead of treating it as an infra failure."""
 
 
 def _floats_to_decimal(item: dict[str, Any]) -> dict[str, Any]:
@@ -93,6 +101,39 @@ class RunsTable:
             ),
         )
         return [_item_to_run(item) for item in resp.get("Items", [])]
+
+    def add_spend(self, run_id: uuid.UUID | str, delta: float, max_usd: float) -> None:
+        """Atomically add `delta` to `spent_usd`, enforcing
+        `spent_usd + delta <= max_usd` with a single conditional
+        `update_item` -- never a read-then-write race (CLAUDE.md
+        invariant #6).
+
+        Raises `BudgetExceededError` if the condition fails (two
+        concurrent/sequential calls that together would exceed
+        `max_usd`), so the caller gets a specific, catchable exception
+        rather than a bare `ClientError` leaking through.
+        """
+
+        delta_decimal = Decimal(str(delta))
+        max_decimal = Decimal(str(max_usd))
+
+        try:
+            self._table.update_item(
+                Key={"run_id": str(run_id)},
+                UpdateExpression="SET spent_usd = spent_usd + :delta",
+                ConditionExpression="spent_usd <= :max_minus_delta",
+                ExpressionAttributeValues={
+                    ":delta": delta_decimal,
+                    ":max_minus_delta": max_decimal - delta_decimal,
+                },
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise BudgetExceededError(
+                    f"adding {delta} to run {run_id}'s spend would exceed "
+                    f"max_usd={max_usd}"
+                ) from exc
+            raise
 
 
 class EventsTable:

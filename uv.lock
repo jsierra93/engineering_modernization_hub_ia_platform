@@ -222,6 +222,12 @@ source = { virtual = "packages/contracts" }
 name = "core-ops"
 version = "0.1.0"
 source = { editable = "services/core_ops" }
+dependencies = [
+    { name = "core-py" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "core-py", editable = "packages/core_py" }]
 
 [[package]]
 name = "core-py"
@@ -391,6 +397,24 @@ source = { editable = "services/fetch_doc" }
 name = "fetch-repo"
 version = "0.1.0"
 source = { editable = "services/fetch_repo" }
+dependencies = [
+    { name = "boto3" },
+    { name = "requests" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "responses" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.34" },
+    { name = "requests", specifier = ">=2.31" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "responses", specifier = ">=0.25" }]
 
 [[package]]
 name = "idna"

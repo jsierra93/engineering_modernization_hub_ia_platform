@@ -1,0 +1,14 @@
+[project]
+name = "sample-repo"
+version = "0.1.0"
+description = "Throwaway fixture project for sandbox/README.md self-verification (task 2.1)."
+requires-python = ">=3.10"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["sample_repo"]
+package-dir = { "sample_repo" = "src" }
