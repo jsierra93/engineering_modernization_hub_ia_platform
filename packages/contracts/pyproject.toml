@@ -1,0 +1,9 @@
+[project]
+name = "contracts"
+version = "0.1.0"
+description = "packages/contracts -- openapi.yaml, the single source for the modhub/v1 API surface"
+requires-python = ">=3.14,<3.15"
+dependencies = []
+
+[tool.uv]
+package = false

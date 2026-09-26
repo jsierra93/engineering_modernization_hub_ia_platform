@@ -1,0 +1,742 @@
+openapi: "3.0.3"
+info:
+  title: Engineering Modernization Hub API
+  description: >
+    modhub/v1 -- the single source of truth for the API surface consumed by
+    the CLI, the Backstage backend plugin and lambda api itself. "El LLM
+    propone, el nucleo dispone": this contract never lets a client set a
+    run's final status directly -- only core_ops computes it.
+  version: "1.0.0"
+servers:
+  - url: /modhub/v1
+tags:
+  - name: identity
+  - name: strategies
+  - name: runs
+
+paths:
+  /me:
+    get:
+      operationId: getMe
+      tags: [identity]
+      summary: The authenticated caller's identity.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Caller identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /strategies:
+    get:
+      operationId: listStrategies
+      tags: [strategies]
+      summary: List registered strategy manifests.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Strategy catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StrategyManifest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /runs:
+    post:
+      operationId: createRun
+      tags: [runs]
+      summary: Create a modernization run.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: >
+            Replaying the same key returns the original run instead of
+            creating a duplicate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRunRequest"
+      responses:
+        "201":
+          description: Run created and its state-machine execution started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateRunResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: >
+            The free-text objetivo did not match any registered strategy
+            within confidence. No run is created and no budget is spent.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      code:
+                        type: string
+                        enum: [NO_STRATEGY_MATCH]
+    get:
+      operationId: listRuns
+      tags: [runs]
+      summary: List runs visible to the caller.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            $ref: "#/components/schemas/RunStatus"
+        - in: query
+          name: mine
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - in: query
+          name: requested_by
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - in: query
+          name: cursor
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Page of runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Run"
+                  next_cursor:
+                    type: string
+                    nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /runs/{run_id}:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Read a run's current state.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /runs/{run_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRunEvents
+      tags: [runs]
+      summary: Ordered event trail for a run.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: since_seq
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Events, ordered by sequence.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Event"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /runs/{run_id}/plan:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRunPlan
+      tags: [runs]
+      summary: The agent-proposed plan awaiting (or already given) approval.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /runs/{run_id}/approval:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: approveRun
+      tags: [runs]
+      summary: >
+        Approve or reject the pending plan. A single conditional write:
+        requester's sub must match requested_by, state must be
+        AWAITING_APPROVAL, plan_hash must match, auth must be recent.
+        SendTaskSuccess/SendTaskFailure fires only if that write succeeds.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalRequest"
+      responses:
+        "200":
+          description: Approval recorded; the run resumes or is rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Caller is not the run's requester.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >
+            plan_hash does not match the currently pending plan (it was
+            superseded), or the run is not in AWAITING_APPROVAL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /runs/{run_id}/cancellation:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: cancelRun
+      tags: [runs]
+      summary: Cancel a run. A human decision, not a modernization outcome.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Run transitioned to CANCELADO.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Caller is not the run's requester.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Run is already in a terminal state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /runs/{run_id}/diff:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRunDiff
+      tags: [runs]
+      summary: Unified diff produced by the run, contained in approved paths.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The diff.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Diff"
+            text/plain:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /runs/{run_id}/report:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRunReport
+      tags: [runs]
+      summary: >
+        Final report: verdict computed by core_ops from real JUnit, plus
+        the agent's narrative (sources, decisions, rationale). The state
+        never depends on the model's text.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    RunId:
+      in: path
+      name: run_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The run does not exist or is not visible to the caller.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message, run_id]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        run_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    Me:
+      type: object
+      required: [sub, email]
+      properties:
+        sub:
+          type: string
+        email:
+          type: string
+          format: email
+        groups:
+          type: array
+          items:
+            type: string
+
+    RunStatus:
+      type: string
+      description: >
+        PENDING, AWAITING_APPROVAL and RUNNING are in-flight. CANCELADO is a
+        human decision, not a modernization outcome. The other five are the
+        final states core_ops evaluates in strict order (first match wins):
+        PRESUPUESTO_AGOTADO > BLOQUEADO > FALLIDO_CONTROLADO >
+        COMPLETADO_PARCIALMENTE > LISTO_PARA_REVISION.
+      enum:
+        - PENDING
+        - AWAITING_APPROVAL
+        - RUNNING
+        - CANCELADO
+        - PRESUPUESTO_AGOTADO
+        - BLOQUEADO
+        - FALLIDO_CONTROLADO
+        - COMPLETADO_PARCIALMENTE
+        - LISTO_PARA_REVISION
+
+    ResolvedStrategy:
+      type: object
+      required: [id, version, match_confidence]
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        match_confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+
+    Restricciones:
+      type: object
+      properties:
+        excluded_paths:
+          type: array
+          items:
+            type: string
+          default: []
+
+    CreateRunRequest:
+      type: object
+      required: [repo, commit, objetivo, max_usd, max_iterations, max_minutes]
+      properties:
+        repo:
+          type: string
+          description: Repository URL.
+        commit:
+          type: string
+          description: Exact commit SHA to fetch and run against.
+          pattern: "^[0-9a-fA-F]{40}$"
+        objetivo:
+          type: string
+          description: Free-text modernization objective.
+          minLength: 1
+        inputs:
+          type: object
+          description: Strategy-specific inputs (validated against the resolved strategy's manifest().inputs).
+          additionalProperties: true
+        restricciones:
+          $ref: "#/components/schemas/Restricciones"
+        max_usd:
+          type: number
+          format: float
+          minimum: 0
+          exclusiveMinimum: true
+        max_iterations:
+          type: integer
+          minimum: 1
+        max_minutes:
+          type: integer
+          minimum: 1
+
+    CreateRunResponse:
+      type: object
+      required: [run_id, status, resolved_strategy, requested_by, created_at]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        resolved_strategy:
+          $ref: "#/components/schemas/ResolvedStrategy"
+        requested_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Run:
+      type: object
+      required:
+        - run_id
+        - status
+        - repo
+        - commit
+        - objetivo
+        - requested_by
+        - strategy_id
+        - strategy_version
+        - max_usd
+        - max_iterations
+        - max_minutes
+        - spent_usd
+        - iterations_used
+        - created_at
+        - updated_at
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        repo:
+          type: string
+        commit:
+          type: string
+          pattern: "^[0-9a-fA-F]{40}$"
+        objetivo:
+          type: string
+        inputs:
+          type: object
+          additionalProperties: true
+        restricciones:
+          $ref: "#/components/schemas/Restricciones"
+        requested_by:
+          type: string
+        strategy_id:
+          type: string
+        strategy_version:
+          type: string
+        max_usd:
+          type: number
+          format: float
+        max_iterations:
+          type: integer
+        max_minutes:
+          type: integer
+        spent_usd:
+          type: number
+          format: float
+        iterations_used:
+          type: integer
+        plan_hash:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Event:
+      type: object
+      required: [run_id, seq, type, created_at]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+          minimum: 0
+        type:
+          type: string
+          description: >
+            e.g. RunCreated, PhaseStarted, PhaseCompleted, ApprovalRequested,
+            ApprovalGranted, ApprovalRejected, SecurityBlocked, BudgetUpdated,
+            RunCancelled, RunCompleted.
+        message:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    Plan:
+      type: object
+      required: [run_id, plan_hash, summary, steps, created_at]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        plan_hash:
+          type: string
+        summary:
+          type: string
+        steps:
+          type: array
+          items:
+            type: object
+            required: [title]
+            properties:
+              title:
+                type: string
+              detail:
+                type: string
+        sources:
+          type: array
+          items:
+            type: string
+            format: uri
+        created_at:
+          type: string
+          format: date-time
+
+    ApprovalRequest:
+      type: object
+      required: [decision, plan_hash]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+        plan_hash:
+          type: string
+        reason:
+          type: string
+
+    Diff:
+      type: object
+      required: [run_id, unified_diff, writable_paths]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        unified_diff:
+          type: string
+        writable_paths:
+          type: array
+          items:
+            type: string
+
+    Report:
+      type: object
+      required: [run_id, status, checks, narrative, cost_usd, created_at]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, passed]
+            properties:
+              name:
+                type: string
+              passed:
+                type: boolean
+              detail:
+                type: string
+        narrative:
+          type: string
+          description: Written by the agent -- sources, decisions, rationale. Never determines status.
+        sources:
+          type: array
+          items:
+            type: string
+            format: uri
+        cost_usd:
+          type: number
+          format: float
+        created_at:
+          type: string
+          format: date-time
+
+    StrategyLimit:
+      type: object
+      required: [default, max]
+      properties:
+        default:
+          type: number
+        max:
+          type: number
+
+    StrategyLimits:
+      type: object
+      required: [max_usd, max_iterations, max_minutes]
+      properties:
+        max_usd:
+          $ref: "#/components/schemas/StrategyLimit"
+        max_iterations:
+          $ref: "#/components/schemas/StrategyLimit"
+        max_minutes:
+          $ref: "#/components/schemas/StrategyLimit"
+
+    StrategyManifest:
+      type: object
+      required: [id, version, title, checks, writable_paths, sources, limits, inputs]
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        title:
+          type: string
+        applies_to:
+          type: object
+          additionalProperties: true
+        inputs:
+          type: object
+          description: JSON-schema-like description of the strategy's own inputs.
+          additionalProperties: true
+        limits:
+          $ref: "#/components/schemas/StrategyLimits"
+        checks:
+          type: array
+          items:
+            type: string
+        writable_paths:
+          type: array
+          items:
+            type: string
+        sources:
+          type: array
+          items:
+            type: string
+            format: uri
