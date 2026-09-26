@@ -50,5 +50,14 @@ provider "aws" {
     sts          = var.floci_endpoint
     cloudwatch   = var.floci_endpoint
     logs         = var.floci_endpoint
+    # Added for the sandbox-network (2.1-tf) / fetch-repo (2.2-tf) modules.
+    # Floci's support for ECS/ECR/Secrets Manager emulation is unconfirmed
+    # as of this writing (only DynamoDB/S3/Lambda/SFN/API Gateway were
+    # empirically verified per envs/local's own history) - if `terraform
+    # apply` fails against one of these, that is the first thing to check.
+    ecs            = var.floci_endpoint
+    ecr            = var.floci_endpoint
+    secretsmanager = var.floci_endpoint
+    events         = var.floci_endpoint
   }
 }

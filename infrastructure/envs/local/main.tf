@@ -36,11 +36,32 @@ module "persistence" {
   s3_force_destroy = true
 }
 
+module "sandbox_network" {
+  source = "../../modules/sandbox-network"
+
+  name_prefix = local.name_prefix
+  tags        = local.common_tags
+  aws_region  = var.aws_region
+
+  # Override the arm64 default for the same reason as the api module's
+  # lambda_architectures override just below: Floci runs container
+  # workloads (Fargate included) as the Docker host's native architecture
+  # and does not cross-emulate arm64.
+  sandbox_architecture = "x86_64"
+}
+
 module "orchestration" {
   source = "../../modules/orchestration"
 
   name_prefix = local.name_prefix
   tags        = local.common_tags
+
+  sandbox_cluster_arn         = module.sandbox_network.ecs_cluster_arn
+  sandbox_task_definition_arn = module.sandbox_network.task_definition_arn
+  sandbox_execution_role_arn  = module.sandbox_network.execution_role_arn
+  sandbox_container_name      = module.sandbox_network.container_name
+  sandbox_subnet_ids          = [module.sandbox_network.public_subnet_id]
+  sandbox_security_group_ids  = [module.sandbox_network.security_group_id]
 }
 
 module "api" {
@@ -66,6 +87,43 @@ module "api" {
   # inside that container, "localhost:4566" resolves to the container
   # itself, not to Floci. host.docker.internal is the standard Docker
   # Desktop bridge back to the host, where Floci's port is published.
+  extra_environment_variables = {
+    AWS_ENDPOINT_URL      = "http://host.docker.internal:4566"
+    AWS_ACCESS_KEY_ID     = "test"
+    AWS_SECRET_ACCESS_KEY = "test"
+    AWS_DEFAULT_REGION    = var.aws_region
+  }
+}
+
+module "fetch_repo" {
+  source = "../../modules/fetch-repo"
+
+  name_prefix            = local.name_prefix
+  tags                   = local.common_tags
+  workspaces_bucket_name = module.persistence.workspaces_bucket_name
+  workspaces_bucket_arn  = module.persistence.workspaces_bucket_arn
+  lambda_architectures   = ["x86_64"]
+
+  extra_environment_variables = {
+    AWS_ENDPOINT_URL      = "http://host.docker.internal:4566"
+    AWS_ACCESS_KEY_ID     = "test"
+    AWS_SECRET_ACCESS_KEY = "test"
+    AWS_DEFAULT_REGION    = var.aws_region
+  }
+}
+
+module "core_ops" {
+  source = "../../modules/core-ops"
+
+  name_prefix           = local.name_prefix
+  tags                  = local.common_tags
+  runs_table_name       = module.persistence.runs_table_name
+  runs_table_arn        = module.persistence.runs_table_arn
+  events_table_name     = module.persistence.events_table_name
+  events_table_arn      = module.persistence.events_table_arn
+  workspaces_bucket_arn = module.persistence.workspaces_bucket_arn
+  lambda_architectures  = ["x86_64"]
+
   extra_environment_variables = {
     AWS_ENDPOINT_URL      = "http://host.docker.internal:4566"
     AWS_ACCESS_KEY_ID     = "test"

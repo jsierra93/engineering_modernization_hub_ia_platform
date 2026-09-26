@@ -1,5 +1,5 @@
 {
-  "Comment": "Engineering Modernization Hub - modernization run state machine (Fase 1 stub). Each phase is a Pass state that only records the phase name and a placeholder status update; real Lambda integrations arrive phase by phase in Fases 2-4 per PLAN.md.",
+  "Comment": "Engineering Modernization Hub - modernization run state machine. Most phases are still Pass-state stubs (Fase 1) that only record the phase name and a placeholder status update; real Lambda/ECS integrations arrive phase by phase in Fases 2-4 per PLAN.md. Baseline (task 2.3/2.3-tf) is the first real integration: a genuine arn:aws:states:::ecs:runTask.sync against the sandbox-network Terraform module. This file is rendered through Terraform's templatefile() (see ../main.tf) - the ${...} placeholders in the Baseline state are substituted with real ARNs/IDs at plan/apply time, they are not literal JSON values.",
   "StartAt": "FetchRepo",
   "States": {
     "FetchRepo": {
@@ -14,12 +14,32 @@
       "Next": "Baseline"
     },
     "Baseline": {
-      "Type": "Pass",
-      "Comment": "Fase 2 (2.3/2.3-tf): becomes a Task running the Fargate sandbox against ws/v0 to produce the baseline JUnit, persisted to S3.",
+      "Type": "Task",
+      "Comment": "Task 2.3/2.3-tf. Real ECS RunTask.sync against the sandbox-network module's Fargate task definition, running the unit_tests check against ws/v0 - baseline only confirms the repo's own tests pass before any change is made (PLAN.md 2.3: 'baseline solo confirma que los tests propios del repo pasan antes de cualquier cambio'). The sandbox task definition bakes in NO environment variables (CLAUDE.md invariant #8), so check-specific input is supplied here, at invocation time, via ContainerOverrides only. ASSUMPTION - FLAGGED, depends on a parallel task's output not yet available when this was authored (no sandbox/entrypoint.py or sandbox/README.md existed in the repo at authoring time): the sandbox image's entrypoint (1) selects which check to run from a CHECK_NAME environment variable, and (2) reads/writes its workspace and JUnit result via presigned S3 URLs (never AWS credentials - the sandbox has none) passed as the WORKSPACE_GET_URL and JUNIT_PUT_URL environment variables. Those two URLs are assumed to be produced by the FetchRepo phase and threaded through as $.phase_result.workspace_get_url / $.phase_result.junit_put_url (FetchRepo's own ResultPath is $.phase_result, so this is the first field Baseline can read). If the real sandbox entrypoint expects a different contract (e.g. a command override instead of env vars, or a different field path for the URLs), only this state's Parameters.Overrides needs to change to match - nothing else in this state machine depends on the exact shape.",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
-        "run_id.$": "$.run_id",
-        "phase": "BASELINE",
-        "status": "BASELINE"
+        "Cluster": "${sandbox_cluster_arn}",
+        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ${sandbox_subnet_ids},
+            "SecurityGroups": ${sandbox_security_group_ids},
+            "AssignPublicIp": "${sandbox_assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${sandbox_container_name}",
+              "Environment": [
+                { "Name": "CHECK_NAME", "Value": "unit_tests" },
+                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.phase_result.workspace_get_url" },
+                { "Name": "JUNIT_PUT_URL", "Value.$": "$.phase_result.junit_put_url" }
+              ]
+            }
+          ]
+        }
       },
       "ResultPath": "$.phase_result",
       "Next": "DiscoveryPlan"
