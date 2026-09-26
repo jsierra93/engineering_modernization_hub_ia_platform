@@ -48,8 +48,16 @@ def test_run_round_trip_matches_openapi_run_schema():
     for field in required:
         assert field in dumped, f"Run.model_dump is missing required field {field!r}"
 
-    # Every field the model emits must be a field the schema knows about.
+    # Internal-only fields (Fase 4's approval callback token) are a
+    # DynamoDB storage detail, not part of the public contract -- the real
+    # API response excludes them explicitly (services/api/handler.py's
+    # get_run), so they deliberately never appear in the OpenAPI schema.
+    internal_only_fields = {"task_token"}
+
+    # Every OTHER field the model emits must be a field the schema knows about.
     for field in dumped:
+        if field in internal_only_fields:
+            continue
         assert field in schema_properties, f"Run emits undeclared field {field!r}"
 
     assert dumped["status"] == RunStatus.PENDING.value

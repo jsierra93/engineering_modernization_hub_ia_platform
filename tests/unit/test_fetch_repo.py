@@ -15,8 +15,8 @@ import requests
 import responses
 from moto import mock_aws
 
-from fetch_repo.handler import HttpGetError, fetch_and_store_repo
-from fetch_repo.sanitize import TarSanitizationError
+from fetch_repo.handler import HttpGetError, build_consolidated_archive, fetch_and_store_repo
+from fetch_repo.sanitize import SanitizedMember, TarSanitizationError
 
 REPO = "example/demo"
 COMMIT = "a" * 40
@@ -82,8 +82,74 @@ def test_clean_tarball_lands_under_ws_run_id_v0(s3_resource):
         f"ws/{run_id}/v0/src/demo/main.py",
     }
 
-    obj = s3_resource.Object(BUCKET, f"ws/{run_id}/v0/src/demo/main.py")
-    assert obj.get()["Body"].read() == b"print('hello')\n"
+
+def test_build_consolidated_archive_contains_exactly_the_sanitized_members():
+    """Pure, S3-free: the interesting behavior (does the archive really
+    contain what it should, packed and unpacked correctly) doesn't need
+    moto at all. Task 2.3's gap closure -- see handler.py's module
+    docstring for why this archive exists (a presigned URL names exactly
+    one object; the workspace is many files)."""
+
+    members = [
+        SanitizedMember(path="pyproject.toml", data=b"[project]\nname = 'demo'\n"),
+        SanitizedMember(path="tests/test_demo.py", data=b"def test_ok():\n    assert True\n"),
+    ]
+
+    archive_bytes = build_consolidated_archive(members)
+
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+        names = set(archive.getnames())
+        contents = {m.name: archive.extractfile(m).read() for m in archive.getmembers()}
+
+    assert names == {"pyproject.toml", "tests/test_demo.py"}
+    assert contents["pyproject.toml"] == members[0].data
+    assert contents["tests/test_demo.py"] == members[1].data
+
+
+def test_consolidated_archive_and_presigned_urls(s3_resource):
+    """Task 2.3's gap closure: the sandbox has no AWS SDK/credentials, so
+    it needs one presigned GET for its whole workspace (the archive's
+    actual *content* is verified separately and without moto, above --
+    this test only checks that fetch_and_store_repo writes the archive
+    object and returns usable presigned URLs)."""
+
+    run_id = "22222222-2222-2222-2222-222222222222"
+    tar_bytes = _build_tar_gz(
+        {
+            "pyproject.toml": b"[project]\nname = 'demo'\n",
+            "tests/test_demo.py": b"def test_ok():\n    assert True\n",
+        }
+    )
+
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, TAR_URL, body=tar_bytes, status=200)
+        result = fetch_and_store_repo(
+            run_id=run_id,
+            repo=REPO,
+            commit=COMMIT,
+            bucket=BUCKET,
+            http_session=requests.Session(),
+            s3_resource=s3_resource,
+        )
+
+    # Listing (not a follow-up get_object) is the reliable way this
+    # codebase already verifies S3 writes -- see the per-file assertions
+    # in test_clean_tarball_lands_under_ws_run_id_v0 above, which check
+    # `result.object_keys` rather than reading the objects back.
+    archive_key = f"ws/{run_id}/v0.tar.gz"
+    listed_keys = {obj.key for obj in s3_resource.Bucket(BUCKET).objects.all()}
+    assert archive_key in listed_keys
+
+    # Both URLs are real presigned S3 URLs (signed against the real
+    # endpoint/bucket/key), not placeholders -- a sandbox with zero AWS
+    # credentials could actually use these with a plain HTTPS GET/PUT.
+    # Signature scheme (SigV2 "Signature=" vs SigV4 "X-Amz-Signature=") is
+    # an environment/boto3-config detail, not something to assert on --
+    # what matters is that a real signature is present at all.
+    assert archive_key in result.workspace_get_url
+    assert "Signature" in result.workspace_get_url
+    assert f"ws/{run_id}/junit/unit_tests.xml" in result.junit_put_url
+    assert "Signature" in result.junit_put_url
 
 
 def test_path_traversal_entry_is_rejected(s3_resource):

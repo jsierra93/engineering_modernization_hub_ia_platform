@@ -8,8 +8,14 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from core_py.models import Event, Run
-from core_py.persistence import BudgetExceededError, EventsTable, RunsTable, create_tables
+from core_py.models import Event, Run, RunStatus
+from core_py.persistence import (
+    ApprovalConflictError,
+    BudgetExceededError,
+    EventsTable,
+    RunsTable,
+    create_tables,
+)
 
 
 @pytest.fixture()
@@ -126,3 +132,49 @@ def test_add_spend_second_call_that_would_exceed_max_usd_raises(tables):
     # The rejected call must not have partially applied.
     fetched = runs_table.get(run.run_id)
     assert fetched.spent_usd == pytest.approx(4.0)
+
+
+def test_approve_or_reject_transitions_status_when_condition_matches(tables):
+    runs_table, _ = tables
+    run = _make_run(status=RunStatus.AWAITING_APPROVAL, plan_hash="hash-1")
+    runs_table.put(run)
+
+    runs_table.approve_or_reject(
+        run.run_id, sub="user-123", plan_hash="hash-1", new_status=RunStatus.RUNNING.value
+    )
+
+    assert runs_table.get(run.run_id).status == RunStatus.RUNNING
+
+
+def test_approve_or_reject_raises_on_wrong_requester(tables):
+    runs_table, _ = tables
+    run = _make_run(status=RunStatus.AWAITING_APPROVAL, plan_hash="hash-1")
+    runs_table.put(run)
+
+    with pytest.raises(ApprovalConflictError):
+        runs_table.approve_or_reject(
+            run.run_id, sub="someone-else", plan_hash="hash-1", new_status=RunStatus.RUNNING.value
+        )
+    assert runs_table.get(run.run_id).status == RunStatus.AWAITING_APPROVAL
+
+
+def test_approve_or_reject_raises_on_stale_plan_hash(tables):
+    runs_table, _ = tables
+    run = _make_run(status=RunStatus.AWAITING_APPROVAL, plan_hash="hash-1")
+    runs_table.put(run)
+
+    with pytest.raises(ApprovalConflictError):
+        runs_table.approve_or_reject(
+            run.run_id, sub="user-123", plan_hash="stale-hash", new_status=RunStatus.RUNNING.value
+        )
+
+
+def test_approve_or_reject_raises_when_not_awaiting_approval(tables):
+    runs_table, _ = tables
+    run = _make_run(status=RunStatus.PENDING, plan_hash="hash-1")
+    runs_table.put(run)
+
+    with pytest.raises(ApprovalConflictError):
+        runs_table.approve_or_reject(
+            run.run_id, sub="user-123", plan_hash="hash-1", new_status=RunStatus.RUNNING.value
+        )
