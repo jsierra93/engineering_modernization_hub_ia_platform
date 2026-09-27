@@ -9,3 +9,7 @@ output "queue_url" {
 output "dlq_arn" {
   value = aws_sqs_queue.dlq.arn
 }
+
+output "consumer_policy_arn" {
+  value = aws_iam_policy.notifications_consumer.arn
+}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import useAsync from 'react-use/lib/useAsync';
 import {
   Page,
@@ -12,6 +12,7 @@ import {
   SupportButton,
 } from '@backstage/core-components';
 import { useApi } from '@backstage/core-plugin-api';
+import { useSignal } from '@backstage/plugin-signals-react';
 import { Button, FormControlLabel, Switch } from '@material-ui/core';
 import { modhubApiRef } from '../../apis';
 import { Run } from '../../api/types';
@@ -48,6 +49,14 @@ export const ModernizacionesPage = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [reviewing, setReviewing] = useState<Run | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  const { lastSignal } = useSignal<{ event_type: string; run_id: string }>('modhub:runs');
+
+  useEffect(() => {
+    if (lastSignal) {
+      setRefreshKey(key => key + 1);
+    }
+  }, [lastSignal]);
 
   const { value: runs, loading, error } = useAsync(
     async () => modhubApi.listRuns({ mine: mineOnly }),

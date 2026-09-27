@@ -15,9 +15,12 @@
     "clean": "backstage-cli package clean"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1141.0",
     "@backstage/backend-defaults": "^0.18.0",
     "@backstage/backend-plugin-api": "^1.10.1",
     "@backstage/errors": "^1.2.7",
+    "@backstage/plugin-notifications-node": "^0.2.30",
+    "@backstage/plugin-signals-node": "^0.2.5",
     "express": "^4.21.2",
     "express-promise-router": "^4.1.1"
   },

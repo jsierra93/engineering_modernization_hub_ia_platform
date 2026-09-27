@@ -19,7 +19,8 @@ from typing import Any
 
 from core_py.models import RunStatus
 from core_py.observability import log_event
-from core_py.persistence import BudgetExceededError, RunsTable
+from core_py.models import Event
+from core_py.persistence import EventsTable, RunsTable
 
 from core_ops.plan_hash import compute_plan_hash
 from core_ops.suite_integrity import JUnitSummary, check_suite_integrity, parse_junit
@@ -64,6 +65,7 @@ def _record_plan(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]
     log_event("core_ops.plan_recorded", run_id=run_id, plan_hash=plan_hash)
     run.plan_hash = plan_hash
     run.plan = event["plan"]
+    run.awaiting_approval_since = datetime.now(UTC)
     run.status = RunStatus.AWAITING_APPROVAL
     runs_table.put(run)
 
@@ -85,27 +87,65 @@ def _resolve_junit_xml(event: dict[str, Any], *, key_field: str, xml_field: str,
     return s3_resource.Object(bucket, key).get()["Body"].read().decode("utf-8", errors="replace")
 
 
-def _record_spend(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
+def _persist_denials(run_id: str, denials: list[dict[str, Any]], events_table: EventsTable | None) -> None:
+    """CLAUDE.md: "cada denegación queda en la tabla de eventos". The gate
+    decides and agent_phase reports; agent_phase has no DynamoDB access, so
+    writing them is core_ops' job."""
+
+    if not denials or events_table is None:
+        return
+
+    base_seq = len(events_table.query_by_run_id(run_id))
+    for offset, denial in enumerate(denials):
+        events_table.append(
+            Event(
+                run_id=run_id,
+                seq=base_seq + offset,
+                type="SecurityBlocked",
+                message=denial.get("reason"),
+                data=denial,
+            )
+        )
+        log_event("core_ops.security_blocked", run_id=run_id, **denial)
+
+
+def _record_spend(
+    event: dict[str, Any], runs_table: RunsTable, events_table: EventsTable | None = None
+) -> dict[str, Any]:
     """Applies a Bedrock cost delta reported by agent_phase (which has no
     DynamoDB access itself) to the run's budget ledger, via the same
     atomic conditional update `add_spend` already provides (invariant #6).
-    A caught BudgetExceededError is reported, not raised, so the ASL can
-    route it to PRESUPUESTO_AGOTADO via a Choice state instead of an
-    unhandled Lambda failure."""
+    The spend is always recorded; whether it put the run over its limit is
+    reported back so the ASL can stop before the next phase."""
 
     run_id = event["run_id"]
     run = runs_table.get(run_id)
     if run is None:
         raise ValueError(f"no such run: {run_id}")
 
-    try:
-        runs_table.add_spend(run_id, event["delta_usd"], run.max_usd)
-        exhausted = False
-    except BudgetExceededError:
-        exhausted = True
+    _persist_denials(run_id, event.get("denials") or [], events_table)
 
-    log_event("core_ops.spend", run_id=run_id, delta_usd=event["delta_usd"], budget_exhausted=exhausted)
-    return {"run_id": str(run_id), "budget_exhausted": exhausted}
+    phase, model_id = event.get("phase"), event.get("model_id")
+    if phase and model_id and run.models_used.get(phase) != model_id:
+        run.models_used[phase] = model_id
+        # Before add_spend, whose atomic increment this put would otherwise
+        # overwrite with the value read above.
+        runs_table.put(run)
+
+    spent_usd = runs_table.add_spend(run_id, event["delta_usd"])
+    exhausted = spent_usd >= run.max_usd
+
+    log_event(
+        "core_ops.spend",
+        run_id=run_id,
+        delta_usd=event["delta_usd"],
+        phase=phase,
+        model_id=model_id,
+        spent_usd=spent_usd,
+        max_usd=run.max_usd,
+        budget_exhausted=exhausted,
+    )
+    return {"run_id": str(run_id), "spent_usd": spent_usd, "budget_exhausted": exhausted}
 
 
 def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: Any = None) -> dict[str, Any]:
@@ -120,7 +160,9 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
     final: JUnitSummary = parse_junit(final_xml)
     violation = check_suite_integrity(baseline, final)
 
-    elapsed_minutes = (datetime.now(UTC) - run.created_at).total_seconds() / 60.0
+    elapsed_minutes = (
+        (datetime.now(UTC) - run.created_at).total_seconds() - run.approval_wait_seconds
+    ) / 60.0
     budget = BudgetStatus(
         spent_usd=run.spent_usd,
         max_usd=run.max_usd,
@@ -150,6 +192,7 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
         spent_usd=run.spent_usd,
         max_usd=run.max_usd,
         elapsed_minutes=round(elapsed_minutes, 2),
+        approval_wait_seconds=run.approval_wait_seconds,
         max_minutes=run.max_minutes,
         iterations_used=run.iterations_used,
         max_iterations=run.max_iterations,
@@ -175,7 +218,13 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
     }
 
 
-def _run(event: dict[str, Any], *, runs_table: RunsTable, s3_resource: Any = None) -> dict[str, Any]:
+def _run(
+    event: dict[str, Any],
+    *,
+    runs_table: RunsTable,
+    s3_resource: Any = None,
+    events_table: EventsTable | None = None,
+) -> dict[str, Any]:
     action = event["action"]
     if action == "record_plan":
         return _record_plan(event, runs_table)
@@ -184,13 +233,17 @@ def _run(event: dict[str, Any], *, runs_table: RunsTable, s3_resource: Any = Non
     if action == "record_task_token":
         return _record_task_token(event, runs_table)
     if action == "record_spend":
-        return _record_spend(event, runs_table)
+        return _record_spend(event, runs_table, events_table)
     raise UnknownActionError(f"action {action!r} is not implemented")
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     import boto3
 
-    runs_table = RunsTable(resource=boto3.resource("dynamodb"))
-    s3_resource = boto3.resource("s3")
-    return _run(event, runs_table=runs_table, s3_resource=s3_resource)
+    resource = boto3.resource("dynamodb")
+    return _run(
+        event,
+        runs_table=RunsTable(resource=resource),
+        s3_resource=boto3.resource("s3"),
+        events_table=EventsTable(resource=resource),
+    )

@@ -32,3 +32,23 @@ resource "aws_sqs_queue" "notifications" {
     Name = "${var.name_prefix}-notifications"
   })
 }
+
+# Task 5.2-tf. Backstage runs on the operator's machine in this prototype,
+# under their own credentials, so nothing attaches this yet -- it exists so
+# the least-privilege boundary is defined in code rather than described in
+# prose, and is ready to attach the day Backstage gets its own identity.
+resource "aws_iam_policy" "notifications_consumer" {
+  name        = "${var.name_prefix}-notifications-consumer"
+  description = "Receive and delete from the modhub notifications queue. Nothing else."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+      Resource = aws_sqs_queue.notifications.arn
+    }]
+  })
+
+  tags = var.tags
+}

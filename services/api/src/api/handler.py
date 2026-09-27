@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import UTC, datetime
 import uuid
 from typing import Any
 
@@ -43,6 +44,18 @@ DEFAULT_APPROVAL_MAX_AUTH_AGE_SECONDS = 300
 # core_ops.limits.resolve_limits: api and core_ops are separately packaged
 # Lambdas (see api/strategy_lookup.py's own comment on this boundary).
 LIMIT_FIELDS = ("max_usd", "max_iterations", "max_minutes")
+
+
+def _loggable_body(event: dict[str, Any]) -> Any:
+    """The request body, never the headers: those carry the bearer token."""
+
+    raw = event.get("body") or ""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw[:2000]
 
 
 def _error_response(status_code: int, code: str, message: str, run_id: str | None) -> dict[str, Any]:
@@ -387,6 +400,13 @@ def handle_approval(
             run_id,
         )
 
+    if run.awaiting_approval_since is not None:
+        waited = (datetime.now(UTC) - run.awaiting_approval_since).total_seconds()
+        run.approval_wait_seconds += waited
+        run.status = new_status
+        runs_table.put(run)
+        log_event("api.approval_recorded", run_id=run_id, decision=decision, waited_seconds=round(waited, 1))
+
     # The Run row we already read still carries the task_token recorded by
     # AwaitApproval (record_task_token) -- reading it again post-update
     # would just refetch the same value now paired with the new status.
@@ -422,13 +442,46 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     path_params = event.get("pathParameters") or {}
     raw_path = event.get("rawPath") or event.get("path") or ""
 
-    if method == "POST" and "run_id" not in path_params:
-        return create_run(event, runs_table, sfn_client)
-    if method == "POST" and path_params.get("run_id") and raw_path.endswith("/approval"):
-        return handle_approval(event, runs_table, sfn_client)
-    if method == "GET" and path_params.get("run_id"):
-        return get_run(event, runs_table)
-    if method == "GET" and "run_id" not in path_params:
-        return list_runs(event, runs_table)
+    log_event(
+        "api.request",
+        method=method,
+        path=raw_path,
+        query=event.get("queryStringParameters") or {},
+        path_params=path_params,
+        requested_by=_requested_by(event),
+        body=_loggable_body(event),
+    )
 
-    return _error_response(404, "ROUTE_NOT_FOUND", "No route matches this request.", None)
+    try:
+        if method == "POST" and "run_id" not in path_params:
+            response = create_run(event, runs_table, sfn_client)
+        elif method == "POST" and path_params.get("run_id") and raw_path.endswith("/approval"):
+            response = handle_approval(event, runs_table, sfn_client)
+        elif method == "GET" and path_params.get("run_id"):
+            response = get_run(event, runs_table)
+        elif method == "GET" and "run_id" not in path_params:
+            response = list_runs(event, runs_table)
+        else:
+            response = _error_response(404, "ROUTE_NOT_FOUND", "No route matches this request.", None)
+    except Exception as exc:
+        # Re-raised so the state machine / API Gateway still see the failure;
+        # logged first because an unhandled traceback alone does not say which
+        # request produced it.
+        log_event(
+            "api.unhandled_error",
+            method=method,
+            path=raw_path,
+            error_type=type(exc).__name__,
+            error=str(exc)[:500],
+        )
+        raise
+
+    status = response.get("statusCode")
+    log_event(
+        "api.response",
+        method=method,
+        path=raw_path,
+        status=status,
+        body=response.get("body", "")[:2000] if status and status >= 400 else None,
+    )
+    return response

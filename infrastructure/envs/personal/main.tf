@@ -22,7 +22,10 @@ locals {
   # Inference-profile ids, not bare model ids: Claude 4.5 models report no
   # ON_DEMAND support, so InvokeModel against a bare id fails.
   analysis_model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-  code_model_id     = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  # Sonnet needs an AWS Marketplace subscription this account does not have
+  # (ConverseStream returns AccessDeniedException). Haiku for both roles
+  # until that is granted -- the split exists, it just points at one model.
+  code_model_id     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
   common_tags = {
     Project     = "engineering-modernization-hub"
@@ -155,4 +158,6 @@ module "agent_phase" {
   code_model_id           = local.code_model_id
   lambda_package_zip_path = local.agent_phase_package_path
   lambda_architectures    = local.lambda_architectures
+
+  enable_invocation_logging = true
 }

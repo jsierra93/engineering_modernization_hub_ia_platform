@@ -104,9 +104,23 @@ data "aws_iam_policy_document" "agent_phase_lambda_scope" {
     actions = [
       "s3:PutObject",
       "s3:GetObject",
-      "s3:ListBucket",
     ]
     resources = ["${var.workspaces_bucket_arn}/ws/*"]
+  }
+
+  # s3:ListBucket is a bucket-level action: on an object ARN it can never
+  # match. Scoped by prefix condition instead, so this stays limited to ws/.
+  statement {
+    sid       = "ListWorkspacePrefixOnly"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [var.workspaces_bucket_arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["ws/*"]
+    }
   }
 
   statement {
@@ -176,4 +190,69 @@ resource "aws_lambda_function" "agent_phase" {
   })
 
   depends_on = [aws_cloudwatch_log_group.agent_phase_lambda]
+}
+
+resource "aws_cloudwatch_log_group" "bedrock_invocations" {
+  count = var.enable_invocation_logging ? 1 : 0
+
+  name              = "/aws/bedrock/${var.name_prefix}-invocations"
+  retention_in_days = var.invocation_log_retention_days
+
+  tags = var.tags
+}
+
+data "aws_iam_policy_document" "bedrock_logging_assume_role" {
+  count = var.enable_invocation_logging ? 1 : 0
+
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["bedrock.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "bedrock_logging" {
+  count = var.enable_invocation_logging ? 1 : 0
+
+  name               = "${var.name_prefix}-bedrock-logging-role"
+  assume_role_policy = data.aws_iam_policy_document.bedrock_logging_assume_role[0].json
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "bedrock_logging" {
+  count = var.enable_invocation_logging ? 1 : 0
+
+  name = "${var.name_prefix}-bedrock-logging"
+  role = aws_iam_role.bedrock_logging[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = "${aws_cloudwatch_log_group.bedrock_invocations[0].arn}:*"
+    }]
+  })
+}
+
+resource "aws_bedrock_model_invocation_logging_configuration" "this" {
+  count = var.enable_invocation_logging ? 1 : 0
+
+  logging_config {
+    embedding_data_delivery_enabled = false
+    image_data_delivery_enabled     = false
+    text_data_delivery_enabled      = true
+
+    cloudwatch_config {
+      log_group_name = aws_cloudwatch_log_group.bedrock_invocations[0].name
+      role_arn       = aws_iam_role.bedrock_logging[0].arn
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.bedrock_logging]
 }

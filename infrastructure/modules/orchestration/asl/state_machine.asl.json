@@ -99,7 +99,9 @@
       },
       "ResultSelector": {
         "plan.$": "$.Payload.result",
-        "cost_usd.$": "$.Payload.cost_usd"
+        "cost_usd.$": "$.Payload.cost_usd",
+        "denials.$": "$.Payload.denials",
+        "model_id.$": "$.Payload.model_id"
       },
       "ResultPath": "$.discovery_plan_result",
       "Catch": [
@@ -121,11 +123,30 @@
         "Payload": {
           "action": "record_spend",
           "run_id.$": "$.run_id",
-          "delta_usd.$": "$.discovery_plan_result.cost_usd"
+          "delta_usd.$": "$.discovery_plan_result.cost_usd",
+          "denials.$": "$.discovery_plan_result.denials",
+          "model_id.$": "$.discovery_plan_result.model_id",
+          "phase": "discovery_plan"
         }
       },
+      "ResultSelector": {
+        "spent_usd.$": "$.Payload.spent_usd",
+        "budget_exhausted.$": "$.Payload.budget_exhausted"
+      },
       "ResultPath": "$.spend_result",
-      "Next": "CheckViability"
+      "Next": "CheckBudgetDiscoveryPlan"
+    },
+
+    "CheckBudgetDiscoveryPlan": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.spend_result.budget_exhausted",
+          "BooleanEquals": true,
+          "Next": "ComputeBudgetExhaustedVerdict"
+        }
+      ],
+      "Default": "CheckViability"
     },
 
     "CheckViability": {
@@ -239,7 +260,9 @@
         "junit_put_url.$": "$.Payload.junit_put_url",
         "junit_key.$": "$.Payload.junit_key",
         "bucket.$": "$.Payload.bucket",
-        "cost_usd.$": "$.Payload.cost_usd"
+        "cost_usd.$": "$.Payload.cost_usd",
+        "denials.$": "$.Payload.denials",
+        "model_id.$": "$.Payload.model_id"
       },
       "ResultPath": "$.implement_result",
       "Catch": [
@@ -261,11 +284,30 @@
         "Payload": {
           "action": "record_spend",
           "run_id.$": "$.run_id",
-          "delta_usd.$": "$.implement_result.cost_usd"
+          "delta_usd.$": "$.implement_result.cost_usd",
+          "denials.$": "$.implement_result.denials",
+          "model_id.$": "$.implement_result.model_id",
+          "phase": "implement"
         }
       },
+      "ResultSelector": {
+        "spent_usd.$": "$.Payload.spent_usd",
+        "budget_exhausted.$": "$.Payload.budget_exhausted"
+      },
       "ResultPath": "$.spend_result",
-      "Next": "Verify"
+      "Next": "CheckBudgetImplement"
+    },
+
+    "CheckBudgetImplement": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.spend_result.budget_exhausted",
+          "BooleanEquals": true,
+          "Next": "ComputeBudgetExhaustedVerdict"
+        }
+      ],
+      "Default": "Verify"
     },
 
     "Verify": {
@@ -341,7 +383,9 @@
         "junit_put_url.$": "$.Payload.junit_put_url",
         "junit_key.$": "$.Payload.junit_key",
         "bucket.$": "$.Payload.bucket",
-        "cost_usd.$": "$.Payload.cost_usd"
+        "cost_usd.$": "$.Payload.cost_usd",
+        "denials.$": "$.Payload.denials",
+        "model_id.$": "$.Payload.model_id"
       },
       "ResultPath": "$.implement_result",
       "Catch": [
@@ -363,11 +407,30 @@
         "Payload": {
           "action": "record_spend",
           "run_id.$": "$.run_id",
-          "delta_usd.$": "$.implement_result.cost_usd"
+          "delta_usd.$": "$.implement_result.cost_usd",
+          "denials.$": "$.implement_result.denials",
+          "model_id.$": "$.implement_result.model_id",
+          "phase": "implement"
         }
       },
+      "ResultSelector": {
+        "spent_usd.$": "$.Payload.spent_usd",
+        "budget_exhausted.$": "$.Payload.budget_exhausted"
+      },
       "ResultPath": "$.spend_result",
-      "Next": "IncrementIteration"
+      "Next": "CheckBudgetFix"
+    },
+
+    "CheckBudgetFix": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.spend_result.budget_exhausted",
+          "BooleanEquals": true,
+          "Next": "ComputeBudgetExhaustedVerdict"
+        }
+      ],
+      "Default": "IncrementIteration"
     },
 
     "IncrementIteration": {
@@ -392,6 +455,25 @@
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
           "final_junit_key.$": "$.fetch_repo_result.junit_key",
           "unrecoverable_error": true,
+          "checks": {}
+        }
+      },
+      "ResultPath": "$.verdict_result",
+      "End": true
+    },
+
+    "ComputeBudgetExhaustedVerdict": {
+      "Type": "Task",
+      "Comment": "The recorded spend reached max_usd. evaluate_verdict's rule 1 derives PRESUPUESTO_AGOTADO from the persisted ledger -- no flag is passed in.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.fetch_repo_result.junit_key",
           "checks": {}
         }
       },

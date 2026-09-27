@@ -88,3 +88,19 @@ variable "log_retention_days" {
   type    = number
   default = 14
 }
+
+variable "enable_invocation_logging" {
+  description = <<-EOT
+    Log every Bedrock request and response to CloudWatch. Account- and
+    region-wide, not per-model: it also captures the api resolver's call.
+    Off by default -- prompts carry repository content verbatim, so this
+    is a deliberate choice, not a default.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "invocation_log_retention_days" {
+  type    = number
+  default = 7
+}

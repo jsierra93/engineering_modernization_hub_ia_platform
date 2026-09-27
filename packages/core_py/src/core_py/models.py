@@ -85,8 +85,17 @@ class Run(BaseModel):
     max_iterations: int = Field(ge=1)
     max_minutes: int = Field(ge=1)
     spent_usd: float = 0.0
+    models_used: dict[str, str] = Field(default_factory=dict)
+    """Phase -> Bedrock model id that actually served it. The model is
+    platform configuration and can change between runs, so a run has to
+    carry its own answer rather than pointing at today's config."""
     iterations_used: int = 0
     plan_hash: str | None = None
+    awaiting_approval_since: datetime | None = None
+    approval_wait_seconds: float = 0.0
+    """How long the run sat waiting for a human. Subtracted from elapsed
+    time when the verdict is computed: max_minutes bounds the work, not the
+    deliberation."""
     plan: dict[str, Any] | None = None
     """The DiscoveryPlan the agent proposed, as approved-or-not. Persisted
     so a human can read what they are approving -- an approval against a

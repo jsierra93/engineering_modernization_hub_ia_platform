@@ -64,6 +64,7 @@ POOL_ID="${POOL_ID_ISSUER##*/}"
 CLI_CLIENT_ID="$(py_get cognito_cli_client_id)"
 BACKSTAGE_CLIENT_ID="$(py_get cognito_backstage_client_id)"
 BACKSTAGE_CLIENT_SECRET="$(py_get cognito_backstage_client_secret)"
+NOTIFICATIONS_QUEUE_URL="$(py_get notifications_queue_url)"
 
 echo "  API:            ${API_BASE_URL}"
 echo "  Cognito issuer: ${POOL_ID_ISSUER}"
@@ -109,6 +110,8 @@ done
 
 step "Starting Backstage against '${TARGET}'"
 export MODHUB_API_BASE_URL="${API_BASE_URL}"
+export MODHUB_NOTIFICATIONS_QUEUE_URL="${NOTIFICATIONS_QUEUE_URL}"
+export MODHUB_AWS_REGION="${COGNITO_REGION}"
 # Both targets use the fixed token while the browser OIDC flow is blocked
 # (PLAN.md 5.6). The AUTH_OIDC_* exports below stay, so flipping back is
 # just USE_DEV_TOKEN in plugins/modhub/src/apis.ts.

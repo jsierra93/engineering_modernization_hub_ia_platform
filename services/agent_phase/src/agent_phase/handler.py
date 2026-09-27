@@ -143,6 +143,7 @@ def _run(
     return {
         "run_id": run_id,
         "phase": phase,
+        "model_id": agent.model.get_config()["model_id"],
         "result": result.model_dump(mode="json"),
         "denials": denials,
         "cost_usd": cost_usd,

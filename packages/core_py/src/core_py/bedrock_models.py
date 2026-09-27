@@ -45,7 +45,7 @@ _ENV_VAR_BY_ROLE: dict[ModelRole, str] = {
 # inference-profile ID, which Terraform injects via the env vars above.
 _DEFAULT_MODEL_BY_ROLE: dict[ModelRole, str | None] = {
     ModelRole.ANALYSIS: "anthropic.claude-haiku-4-5-20251001-v1:0",
-    ModelRole.CODE: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    ModelRole.CODE: "anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
 

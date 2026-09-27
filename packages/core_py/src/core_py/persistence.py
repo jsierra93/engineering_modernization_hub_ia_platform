@@ -27,13 +27,6 @@ from botocore.exceptions import ClientError
 from core_py.models import Event, Run
 
 
-class BudgetExceededError(Exception):
-    """Raised by `RunsTable.add_spend` when applying a spend delta would
-    push `spent_usd` past `max_usd`. Distinct from a generic
-    `ClientError` so callers can catch exactly this and route the run to
-    `PRESUPUESTO_AGOTADO` instead of treating it as an infra failure."""
-
-
 class ApprovalConflictError(Exception):
     """Raised by `RunsTable.approve_or_reject` when the conditional update
     fails: the run isn't AWAITING_APPROVAL, `sub` doesn't match
@@ -114,38 +107,25 @@ class RunsTable:
         )
         return [_item_to_run(item) for item in resp.get("Items", [])]
 
-    def add_spend(self, run_id: uuid.UUID | str, delta: float, max_usd: float) -> None:
-        """Atomically add `delta` to `spent_usd`, enforcing
-        `spent_usd + delta <= max_usd` with a single conditional
-        `update_item` -- never a read-then-write race (CLAUDE.md
+    def add_spend(self, run_id: uuid.UUID | str, delta: float) -> float:
+        """Atomically add `delta` to `spent_usd` and return the new total
+        -- one `update_item`, never a read-then-write race (CLAUDE.md
         invariant #6).
 
-        Raises `BudgetExceededError` if the condition fails (two
-        concurrent/sequential calls that together would exceed
-        `max_usd`), so the caller gets a specific, catchable exception
-        rather than a bare `ClientError` leaking through.
+        Recording is unconditional on purpose. The money is already spent
+        by the time this is called, so refusing the write would only make
+        the ledger forget it: the run would report a spend of 0 for a call
+        that really cost money. Stopping the run is the caller's decision,
+        made by comparing this return value against `max_usd`.
         """
 
-        delta_decimal = Decimal(str(delta))
-        max_decimal = Decimal(str(max_usd))
-
-        try:
-            self._table.update_item(
-                Key={"run_id": str(run_id)},
-                UpdateExpression="SET spent_usd = spent_usd + :delta",
-                ConditionExpression="spent_usd <= :max_minus_delta",
-                ExpressionAttributeValues={
-                    ":delta": delta_decimal,
-                    ":max_minus_delta": max_decimal - delta_decimal,
-                },
-            )
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-                raise BudgetExceededError(
-                    f"adding {delta} to run {run_id}'s spend would exceed "
-                    f"max_usd={max_usd}"
-                ) from exc
-            raise
+        resp = self._table.update_item(
+            Key={"run_id": str(run_id)},
+            UpdateExpression="SET spent_usd = spent_usd + :delta",
+            ExpressionAttributeValues={":delta": Decimal(str(delta))},
+            ReturnValues="UPDATED_NEW",
+        )
+        return float(resp["Attributes"]["spent_usd"])
 
     def approve_or_reject(
         self, run_id: uuid.UUID | str, *, sub: str, plan_hash: str, new_status: str

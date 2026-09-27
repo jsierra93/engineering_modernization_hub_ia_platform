@@ -23,6 +23,7 @@ output. Wrapping it in delimiters before it reaches a prompt is
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -39,6 +40,52 @@ MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB
 # Generous enough for a slow doc site, short enough that a hung/adversarial
 # host can't stall the agent's planning phase indefinitely.
 REQUEST_TIMEOUT_SECONDS = 15
+
+# What reaches the prompt, after markup is stripped. A docs page is mostly
+# navigation, scripts and styling: Pydantic's migration guide is ~198KB of
+# HTML for a few KB of prose. Whatever is returned here is re-sent on every
+# turn of the agent's tool loop, so its size is multiplied by the number of
+# turns, not paid once.
+MAX_TEXT_CHARS = 20_000
+
+_SKIPPED_ELEMENTS = {"script", "style", "noscript", "svg", "head", "nav", "footer"}
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in _SKIPPED_ELEMENTS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _SKIPPED_ELEMENTS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        text = data.strip()
+        if text:
+            self._chunks.append(text)
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self._chunks)
+
+
+def extract_text(content: str, content_type: str | None) -> str:
+    if content_type and "html" not in content_type.lower():
+        return content
+    parser = _TextExtractor()
+    try:
+        parser.feed(content)
+    except Exception:  # noqa: BLE001 - malformed markup is not a fetch failure
+        return content
+    return parser.text or content
 
 
 class FetchDocError(Exception):
@@ -152,6 +199,10 @@ def fetch_document(url: str, http_session: SupportsGet) -> DocumentResult:
     content_type = None
     if hasattr(response, "headers"):
         content_type = response.headers.get("Content-Type")
+
+    text = extract_text(text, content_type)
+    if len(text) > MAX_TEXT_CHARS:
+        text = text[:MAX_TEXT_CHARS] + "\n\n[truncated]"
 
     return DocumentResult(url=url, host=host, content=text, content_type=content_type)
 
