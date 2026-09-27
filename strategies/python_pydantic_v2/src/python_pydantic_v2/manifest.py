@@ -56,6 +56,7 @@ def manifest() -> StrategyManifest:
         limits=_LIMITS,
         checks=_CHECKS,
         writable_paths=_WRITABLE_PATHS,
+        excluded_paths=_EXCLUDED_PATHS,
         sources=_SOURCES,
     )
 

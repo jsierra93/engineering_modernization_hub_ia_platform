@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
+from core_py.scope import matches
 
 from strands.hooks import BeforeToolCallEvent
 from strands.interventions import Deny, InterventionHandler, Proceed
@@ -55,6 +55,7 @@ class WritableScopeGate(InterventionHandler):
     """
 
     writable_paths: list[str]
+    excluded_paths: list[str] = field(default_factory=list)
     on_deny: Callable[[DenialEvent], None] = field(default=lambda _event: None)
 
     @property
@@ -62,7 +63,11 @@ class WritableScopeGate(InterventionHandler):
         return "writable-scope-gate"
 
     def _is_writable(self, path: str) -> bool:
-        return any(fnmatch(path, pattern) for pattern in self.writable_paths)
+        # Exclusions win: neither side can re-open what the other closed
+        # (core_py.scope.resolve_scope, CLAUDE.md invariant #4).
+        if any(matches(path, pattern) for pattern in self.excluded_paths):
+            return False
+        return any(matches(path, pattern) for pattern in self.writable_paths)
 
     def before_tool_call(self, event: BeforeToolCallEvent, **kwargs):
         tool_name = event.tool_use["name"]
@@ -72,7 +77,7 @@ class WritableScopeGate(InterventionHandler):
             if not path or not self._is_writable(path):
                 denial = DenialEvent(
                     tool_name=tool_name,
-                    reason=f"path {path!r} is not within the strategy's writable_paths",
+                    reason=f"path {path!r} is not within the run's resolved writable scope",
                     attempted_path=path,
                 )
                 self.on_deny(denial)

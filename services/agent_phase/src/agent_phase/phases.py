@@ -18,6 +18,12 @@ from agent_phase.untrusted import wrap_untrusted
 
 
 class StructuredAgent(Protocol):
+    """Calling the agent runs the real tool loop; structured_output then
+    shapes whatever that loop established. Both matter: structured_output
+    on its own never invokes a tool, so a phase that only called it would
+    plan without reading the repo and implement without writing a file."""
+
+    def __call__(self, prompt: str): ...
     def structured_output(self, output_model, prompt=None): ...
 
 
@@ -33,7 +39,8 @@ def run_discovery_plan(agent: StructuredAgent, *, objetivo: str, strategy_summar
         "documentation as needed (fetch_doc), and produce a complete "
         "DiscoveryPlan. Only cite sources you actually fetched."
     )
-    return agent.structured_output(DiscoveryPlan, prompt)
+    agent(prompt)
+    return agent.structured_output(DiscoveryPlan)
 
 
 def run_implement(agent: StructuredAgent, *, plan: DiscoveryPlan) -> ImplementationResult:
@@ -49,7 +56,8 @@ def run_implement(agent: StructuredAgent, *, plan: DiscoveryPlan) -> Implementat
         f"Plan summary: {plan.summary}\n"
         f"Planned files: {planned_paths}\n"
     )
-    return agent.structured_output(ImplementationResult, prompt)
+    agent(prompt)
+    return agent.structured_output(ImplementationResult)
 
 
 def run_fix(
@@ -72,4 +80,5 @@ def run_fix(
         "within your approved scope.\n\n"
         + wrap_untrusted(junit_failure_excerpt, source="junit:verify")
     )
-    return agent.structured_output(FixAttempt, prompt)
+    agent(prompt)
+    return agent.structured_output(FixAttempt)

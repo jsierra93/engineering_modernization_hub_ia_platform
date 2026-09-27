@@ -18,7 +18,23 @@ these are just structured requests, never decisions.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
+
+
+class _NullTolerant(BaseModel):
+    """Models routinely emit `"field": null` for "nothing here" instead of
+    omitting the key, and a declared default only applies to an absent key.
+    Dropping nulls lets the defaults below do their job, while a genuinely
+    required field with no default still fails loudly."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_nulls(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if value is not None}
+        return data
 
 
 class PlannedFileChange(BaseModel):
@@ -30,7 +46,7 @@ class PlannedFileChange(BaseModel):
     reason: str = Field(description="Why this file needs to change, in one sentence.")
 
 
-class DiscoveryPlan(BaseModel):
+class DiscoveryPlan(_NullTolerant):
     """Output of the DiscoveryPlan phase: what the repo needs, whether it's
     viable, and what's proposed -- before any write happens."""
 
@@ -52,7 +68,7 @@ class FileEdit(BaseModel):
     summary: str = Field(description="One-sentence description of what changed in this file.")
 
 
-class ImplementationResult(BaseModel):
+class ImplementationResult(_NullTolerant):
     """Output of the Implement phase: what was actually written, matched
     against what the plan proposed. The policy gate is what actually
     enforces `writable_paths` at write time -- this schema records the
@@ -65,7 +81,7 @@ class ImplementationResult(BaseModel):
     notes: str = Field(default="", description="Anything the report should mention about the implementation.")
 
 
-class FixAttempt(BaseModel):
+class FixAttempt(_NullTolerant):
     """Output of a fix iteration: analysis of a real JUnit failure and a
     proposed (then applied, through the same write_file tool and gate)
     correction. `test_failure_excerpt` is untrusted-adjacent (it can

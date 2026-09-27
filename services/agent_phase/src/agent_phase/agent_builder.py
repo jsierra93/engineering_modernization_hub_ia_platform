@@ -54,6 +54,7 @@ def build_agent(
     workspace: Workspace,
     fetch_doc_fn: FetchDocFn,
     writable_paths: list[str],
+    excluded_paths: list[str] | None = None,
     on_deny: Callable[[DenialEvent], None] | None = None,
     guardrail_id: str | None = None,
     guardrail_version: str | None = None,
@@ -73,7 +74,11 @@ def build_agent(
         bedrock_kwargs["guardrail_version"] = guardrail_version or "DRAFT"
 
     model = BedrockModel(region_name=region_name, **bedrock_kwargs)
-    gate = WritableScopeGate(writable_paths=writable_paths, on_deny=on_deny or (lambda _e: None))
+    gate = WritableScopeGate(
+        writable_paths=writable_paths,
+        excluded_paths=excluded_paths or [],
+        on_deny=on_deny or (lambda _e: None),
+    )
     tools = build_tools(workspace, fetch_doc_fn, include_write=include_write_tool)
 
     return Agent(

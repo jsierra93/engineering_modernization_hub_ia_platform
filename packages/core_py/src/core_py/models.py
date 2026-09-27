@@ -87,6 +87,11 @@ class Run(BaseModel):
     spent_usd: float = 0.0
     iterations_used: int = 0
     plan_hash: str | None = None
+    plan: dict[str, Any] | None = None
+    """The DiscoveryPlan the agent proposed, as approved-or-not. Persisted
+    so a human can read what they are approving -- an approval against a
+    hash alone is not a decision, it is a signature on an unread document.
+    `plan_hash` is still what the approval is checked against."""
     task_token: str | None = None
     """Step Functions task token for the AwaitApproval callback (Fase 4).
     Internal only -- never included in a public API response (see
@@ -160,5 +165,6 @@ class StrategyManifest(BaseModel):
     limits: StrategyLimits
     checks: list[str]
     writable_paths: list[str]
+    excluded_paths: list[str] = Field(default_factory=list)
     sources: list[str]
     model_limits: StrategyModelLimits = Field(default_factory=StrategyModelLimits)

@@ -78,3 +78,27 @@ def test_on_deny_callback_is_optional():
     gate = WritableScopeGate(writable_paths=[])
     result = gate.before_tool_call(_event("write_file", {"path": "x.py"}))
     assert isinstance(result, Deny)
+
+
+def test_gate_denies_a_path_the_requester_excluded():
+    """A run's restricciones reach the gate as excluded_paths -- the path is
+    inside the strategy's writable_paths and must still be denied."""
+    denials = []
+    gate = WritableScopeGate(
+        writable_paths=["**/*.py"],
+        excluded_paths=["src/legacy/**"],
+        on_deny=denials.append,
+    )
+
+    result = gate.before_tool_call(
+        _event("write_file", {"path": "src/legacy/old.py"}),
+    )
+
+    assert isinstance(result, Deny)
+    assert len(denials) == 1
+
+
+def test_gate_still_allows_paths_outside_the_exclusion():
+    gate = WritableScopeGate(writable_paths=["**/*.py"], excluded_paths=["src/legacy/**"])
+
+    assert isinstance(gate.before_tool_call(_event("write_file", {"path": "src/models.py"})), Proceed)

@@ -93,6 +93,7 @@
           "run_id.$": "$.run_id",
           "phase": "discovery_plan",
           "strategy_id.$": "$.strategy_id",
+          "excluded_paths.$": "$.excluded_paths",
           "objetivo.$": "$.objetivo"
         }
       },
@@ -172,6 +173,10 @@
           "plan.$": "$.discovery_plan_result.plan"
         }
       },
+      "ResultSelector": {
+        "plan_hash.$": "$.Payload.plan_hash",
+        "status.$": "$.Payload.status"
+      },
       "ResultPath": "$.record_plan_result",
       "Next": "NotifyApprovalPending"
     },
@@ -225,6 +230,7 @@
           "run_id.$": "$.run_id",
           "phase": "implement",
           "strategy_id.$": "$.strategy_id",
+          "excluded_paths.$": "$.excluded_paths",
           "plan.$": "$.discovery_plan_result.plan"
         }
       },
@@ -324,6 +330,7 @@
           "run_id.$": "$.run_id",
           "phase": "fix",
           "strategy_id.$": "$.strategy_id",
+          "excluded_paths.$": "$.excluded_paths",
           "junit_key.$": "$.implement_result.junit_key",
           "iteration.$": "$.iteration",
           "max_iterations.$": "$.max_iterations"

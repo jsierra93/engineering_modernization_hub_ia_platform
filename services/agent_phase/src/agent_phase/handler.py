@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from core_py import ModelRole, estimate_cost_usd
+from core_py import ModelRole, estimate_cost_usd, log_event, resolve_scope
 
 from agent_phase.agent_builder import build_agent
 from agent_phase.fetch_doc_client import make_fetch_doc_fn
@@ -59,10 +59,17 @@ def _run(
     def on_deny(denial):
         denials.append({"tool_name": denial.tool_name, "reason": denial.reason, "attempted_path": denial.attempted_path})
 
+    scope = resolve_scope(
+        manifest.writable_paths,
+        manifest.excluded_paths,
+        event.get("excluded_paths") or [],
+    )
+
     common_kwargs = dict(
         workspace=workspace,
         fetch_doc_fn=fetch_doc_fn,
-        writable_paths=manifest.writable_paths,
+        writable_paths=scope.writable_paths,
+        excluded_paths=scope.excluded_paths,
         on_deny=on_deny,
         guardrail_id=os.environ.get(GUARDRAIL_ID_ENV),
         guardrail_version=os.environ.get(GUARDRAIL_VERSION_ENV),
@@ -120,6 +127,17 @@ def _run(
         agent.model.get_config()["model_id"],
         usage["inputTokens"],
         usage["outputTokens"],
+    )
+
+    log_event(
+        "agent_phase.completed",
+        run_id=run_id,
+        phase=phase,
+        model_id=agent.model.get_config()["model_id"],
+        input_tokens=usage["inputTokens"],
+        output_tokens=usage["outputTokens"],
+        cost_usd=cost_usd,
+        denials=len(denials),
     )
 
     return {

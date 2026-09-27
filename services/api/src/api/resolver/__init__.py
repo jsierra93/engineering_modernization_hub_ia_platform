@@ -16,6 +16,7 @@ import json
 from typing import Any
 
 from core_py.bedrock_models import ModelRole, resolve_model_id
+from core_py.observability import log_event
 from core_py.models import StrategyManifest
 
 _SYSTEM_PROMPT = (
@@ -79,12 +80,23 @@ def resolve_strategy(
     try:
         parsed = json.loads(_strip_markdown_fence(text))
     except json.JSONDecodeError as exc:
+        # Distinct from a genuine no-match: a malformed response is our
+        # problem, an explicit null is the model's answer.
+        log_event("resolver.unparseable_response", model_id=resolved_model_id, raw=text[:500])
         raise NoStrategyMatchError(f"model response was not valid JSON: {text!r}") from exc
 
     strategy_id = parsed.get("strategy_id")
     confidence = float(parsed.get("confidence") or 0.0)
 
     if not strategy_id or strategy_id not in by_id:
+        log_event(
+            "resolver.no_match",
+            model_id=resolved_model_id,
+            returned_id=strategy_id,
+            confidence=confidence,
+            candidates=[m.id for m in candidates],
+        )
         raise NoStrategyMatchError(f"objetivo did not match a registered strategy: {objetivo!r}")
 
+    log_event("resolver.matched", model_id=resolved_model_id, strategy_id=strategy_id, confidence=confidence)
     return by_id[strategy_id], confidence

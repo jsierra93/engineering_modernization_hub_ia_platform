@@ -1,5 +1,6 @@
 """Task 3.3: phase wiring proven without Bedrock, via a fake agent that
-satisfies the same `structured_output` interface `strands.Agent` does."""
+satisfies the same interface `strands.Agent` does -- callable (the tool
+loop) plus `structured_output` (shaping what that loop established)."""
 
 from __future__ import annotations
 
@@ -8,16 +9,23 @@ from agent_phase.schemas import DiscoveryPlan, FixAttempt, ImplementationResult,
 
 
 class _FakeStructuredAgent:
-    """Records the prompt it was called with and returns a canned,
-    schema-valid response -- exactly the shape `structured_output` returns
-    for real, so phase functions can't tell the difference."""
+    """Records the prompt the tool loop was driven with, and returns a
+    canned, schema-valid response from structured_output -- exactly the
+    split a real agent has, so phase functions can't tell the difference."""
 
     def __init__(self, response):
         self.response = response
         self.calls: list[tuple[type, str]] = []
+        self.loop_prompt: str | None = None
+
+    def __call__(self, prompt):
+        self.loop_prompt = prompt
+        return None
 
     def structured_output(self, output_model, prompt=None):
-        self.calls.append((output_model, prompt))
+        # The phase drives the loop with the prompt, then asks for
+        # structure over the resulting conversation.
+        self.calls.append((output_model, self.loop_prompt))
         return self.response
 
 

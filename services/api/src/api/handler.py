@@ -22,6 +22,7 @@ from typing import Any
 import boto3
 
 from core_py.models import Restricciones, Run, RunStatus
+from core_py.observability import log_event
 from core_py.persistence import ApprovalConflictError, RunsTable
 
 from api.resolver import NoStrategyMatchError, resolve_strategy
@@ -76,6 +77,14 @@ def _requested_by(event: dict[str, Any]) -> str:
     return headers.get("x-requested-by") or headers.get("X-Requested-By") or "anonymous"
 
 
+def _get_trace_id(event: dict[str, Any]) -> str:
+    """Extract or generate trace_id for distributed tracing.
+    Follows W3C Trace Context convention (x-trace-id header).
+    If x-trace-id header exists, use it; otherwise generate new UUID."""
+    headers = event.get("headers") or {}
+    return headers.get("x-trace-id") or headers.get("X-Trace-Id") or str(uuid.uuid4())
+
+
 def _auth_is_recent(event: dict[str, Any]) -> bool:
     """CLAUDE.md invariant #7: approval requires 'auth is recent', not
     just a validly-signed-but-old token. A real Cognito JWT always carries
@@ -107,6 +116,8 @@ def create_run(
     bedrock_client: Any = None,
 ) -> dict[str, Any]:
     """Handle `POST /modhub/v1/runs`."""
+
+    trace_id = _get_trace_id(event)
 
     try:
         body = json.loads(event.get("body") or "{}")
@@ -186,6 +197,17 @@ def create_run(
     )
 
     runs_table.put(run)
+    log_event(
+        "api.run_created",
+        run_id=run.run_id,
+        trace_id=trace_id,
+        strategy_id=manifest.id,
+        match_confidence=match_confidence,
+        requested_by=requested_by,
+        max_usd=run.max_usd,
+        max_iterations=run.max_iterations,
+        max_minutes=run.max_minutes,
+    )
 
     state_machine_arn = os.environ.get(STATE_MACHINE_ARN_ENV, "arn:aws:states:local:000000000000:stateMachine:modhub-stub")
     sfn_client.start_execution(
@@ -197,12 +219,14 @@ def create_run(
         # state (see orchestration's ASL), so they never need re-threading.
         input=json.dumps(
             {
+                "trace_id": trace_id,
                 "run_id": str(run.run_id),
                 "repo": run.repo,
                 "commit": run.commit,
                 "objetivo": run.objetivo,
                 "strategy_id": run.strategy_id,
                 "max_iterations": run.max_iterations,
+                "excluded_paths": run.restricciones.excluded_paths,
                 "iteration": 0,
             }
         ),

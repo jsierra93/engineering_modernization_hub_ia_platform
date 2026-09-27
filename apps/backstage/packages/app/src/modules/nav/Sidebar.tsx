@@ -34,6 +34,8 @@ export const SidebarContent = NavContentBlueprint.make({
           <SidebarDivider />
           <SidebarGroup label="Menu" icon={<MenuIcon />}>
             {nav.take('page:home')}
+            {/* ModHub - main working page */}
+            {nav.take('page:modhub')}
             {nav.take('page:catalog')}
             {nav.take('page:scaffolder')}
             <SidebarDivider />

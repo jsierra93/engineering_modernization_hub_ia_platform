@@ -38,6 +38,7 @@ export const CreateRunDialog = ({ open, onClose, onCreated }: CreateRunDialogPro
   const [maxUsd, setMaxUsd] = useState('2');
   const [maxIterations, setMaxIterations] = useState('3');
   const [maxMinutes, setMaxMinutes] = useState('20');
+  const [excludedPaths, setExcludedPaths] = useState('');
 
   const submit = async () => {
     setSubmitting(true);
@@ -49,6 +50,12 @@ export const CreateRunDialog = ({ open, onClose, onCreated }: CreateRunDialogPro
         max_usd: Number(maxUsd),
         max_iterations: Number(maxIterations),
         max_minutes: Number(maxMinutes),
+        restricciones: {
+          excluded_paths: excludedPaths
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(Boolean),
+        },
       });
       alertApi.post({
         message: `Run ${created.run_id} creado (${created.resolved_strategy.id}).`,
@@ -109,6 +116,17 @@ export const CreateRunDialog = ({ open, onClose, onCreated }: CreateRunDialogPro
           margin="dense"
           value={maxMinutes}
           onChange={e => setMaxMinutes(e.target.value)}
+        />
+        <TextField
+          label="Rutas excluidas (una por línea)"
+          placeholder={'src/legacy/**\ntests/fixtures/**'}
+          fullWidth
+          multiline
+          minRows={2}
+          margin="dense"
+          helperText="Patrones glob que el agente no podrá modificar, aunque la estrategia los permita."
+          value={excludedPaths}
+          onChange={e => setExcludedPaths(e.target.value)}
         />
       </DialogContent>
       <DialogActions>

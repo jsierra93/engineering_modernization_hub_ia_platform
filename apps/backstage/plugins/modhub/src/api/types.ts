@@ -4,6 +4,22 @@
  * generate types from the OpenAPI spec (out of scope for this pass), so
  * keep this in sync by hand if the contract changes.
  */
+export interface PlannedFileChange {
+  path: string;
+  reason: string;
+}
+
+/** agent_phase.schemas.DiscoveryPlan, persisted on the Run by core_ops so
+ * an approver can read what they are approving. */
+export interface DiscoveryPlan {
+  viable: boolean;
+  viability_reason: string;
+  summary: string;
+  planned_changes?: PlannedFileChange[];
+  sources?: string[];
+  risks?: string[];
+}
+
 export interface Run {
   run_id: string;
   repo: string;
@@ -20,6 +36,7 @@ export interface Run {
   max_minutes: number;
   created_at: string;
   plan_hash?: string | null;
+  plan?: DiscoveryPlan | null;
 }
 
 export interface CreateRunInput {
@@ -29,6 +46,7 @@ export interface CreateRunInput {
   max_usd: number;
   max_iterations: number;
   max_minutes: number;
+  restricciones?: { excluded_paths: string[] };
 }
 
 export interface ApprovalInput {

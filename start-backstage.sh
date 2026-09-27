@@ -68,7 +68,7 @@ BACKSTAGE_CLIENT_SECRET="$(py_get cognito_backstage_client_secret)"
 echo "  API:            ${API_BASE_URL}"
 echo "  Cognito issuer: ${POOL_ID_ISSUER}"
 
-step "Minting a Cognito token for ${TEST_USERNAME}"
+step "Minting a Cognito token for ${TEST_USERNAME} (smoke test)"
 JWT="$(python3 - "${POOL_ID}" "${CLI_CLIENT_ID}" "${TEST_USERNAME}" "${TEST_PASSWORD}" "${COGNITO_ENDPOINT}" "${COGNITO_REGION}" <<'PYEOF'
 import boto3, sys
 pool_id, client_id, username, password, endpoint, region = sys.argv[1:7]
@@ -109,7 +109,12 @@ done
 
 step "Starting Backstage against '${TARGET}'"
 export MODHUB_API_BASE_URL="${API_BASE_URL}"
+# Both targets use the fixed token while the browser OIDC flow is blocked
+# (PLAN.md 5.6). The AUTH_OIDC_* exports below stay, so flipping back is
+# just USE_DEV_TOKEN in plugins/modhub/src/apis.ts.
 export MODHUB_DEV_TOKEN="${JWT}"
+echo "  auth: fixed dev token (browser OIDC pending -- PLAN.md 5.6)"
+export AUTH_SESSION_SECRET="${AUTH_SESSION_SECRET:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 export AUTH_OIDC_METADATA_URL="${POOL_ID_ISSUER}/.well-known/openid-configuration"
 export AUTH_OIDC_CLIENT_ID="${BACKSTAGE_CLIENT_ID}"
 export AUTH_OIDC_CLIENT_SECRET="${BACKSTAGE_CLIENT_SECRET}"

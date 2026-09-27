@@ -13,3 +13,12 @@ def test_estimate_cost_usd_for_configured_model():
 def test_estimate_cost_usd_raises_for_unknown_model():
     with pytest.raises(UnknownModelPricingError):
         estimate_cost_usd("anthropic.claude-does-not-exist", input_tokens=1, output_tokens=1)
+
+
+def test_estimate_cost_usd_accepts_inference_profile_ids():
+    """Real AWS invokes these models through a region-prefixed inference
+    profile; the rate is the model's, not the profile's."""
+    bare = estimate_cost_usd("anthropic.claude-haiku-4-5-20251001-v1:0", 1000, 200)
+    profiled = estimate_cost_usd("us.anthropic.claude-haiku-4-5-20251001-v1:0", 1000, 200)
+
+    assert profiled == pytest.approx(bare)

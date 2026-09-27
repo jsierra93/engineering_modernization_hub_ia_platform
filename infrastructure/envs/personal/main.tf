@@ -51,7 +51,7 @@ module "sandbox_network" {
   ecr_force_delete     = true
   # Pushed by hand to the repo this module creates; the repo is IMMUTABLE,
   # so a rebuilt image needs a new tag here.
-  sandbox_image_tag    = "v1"
+  sandbox_image_tag    = "v3"
 }
 
 module "notifications" {

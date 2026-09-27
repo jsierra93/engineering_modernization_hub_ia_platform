@@ -144,16 +144,28 @@ def push_junit(url: str) -> None:
 KNOWN_CHECKS = ("install", "unit_tests", "lint")
 
 
+def _emit(event: str, **fields) -> None:
+    """One JSON line to stdout, which the awslogs driver ships to
+    CloudWatch. Mirrors core_py.observability.log_event's shape, but
+    inlined: this image deliberately has no dependency on core_py."""
+    import json
+
+    print(json.dumps({"event": event, **fields}, default=str), flush=True)
+
+
 def _write_log(name: str, result: subprocess.CompletedProcess) -> None:
-    """Persist stdout/stderr for a check under /output, always."""
-    log_path = OUTPUT / f"{name}.log"
-    log_path.write_text(
+    """Persist stdout/stderr for a check under /output, and echo to the
+    container's stdout -- /output does not survive the task, so CloudWatch
+    is the only place this is readable after the fact."""
+    body = (
         f"$ {' '.join(result.args)}\n"
         f"exit_code={result.returncode}\n\n"
         f"--- stdout ---\n{result.stdout}\n"
-        f"--- stderr ---\n{result.stderr}\n",
-        encoding="utf-8",
+        f"--- stderr ---\n{result.stderr}\n"
     )
+    (OUTPUT / f"{name}.log").write_text(body, encoding="utf-8")
+    _emit("sandbox.check_output", check=name, exit_code=result.returncode)
+    print(body, flush=True)
 
 
 def _run(cmd: list[str], cwd: Path = WORKSPACE) -> subprocess.CompletedProcess:
@@ -215,6 +227,15 @@ def check_unit_tests() -> int:
     #1/#2/#10) — the format must be genuine JUnit, not a hand-rolled
     summary, and pytest's own --junitxml writer is what guarantees that.
     """
+    # The state machine runs one check per container and containers share
+    # no filesystem, so a separately-run `install` check would not reach
+    # this one. Installing here is what makes the run test the project
+    # rather than a chain of ImportErrors.
+    install_rc = check_install()
+    if install_rc != 0:
+        _emit("sandbox.install_failed_before_tests", exit_code=install_rc)
+        return install_rc
+
     junit_path = OUTPUT / "junit.xml"
     result = _run(
         [
@@ -305,7 +326,12 @@ def main(argv: list[str]) -> int:
         sys.stderr.write(f"/workspace is missing or empty; nothing to check\n")
         return 2
 
+    _emit("sandbox.check_started", check=name)
     exit_code = CHECKS[name]()
+    # pytest's exit 5 is "no tests collected" -- a real, distinct outcome
+    # from "tests failed", and the reason a repo with no suite reaches
+    # BLOQUEADO rather than looking like a broken run.
+    _emit("sandbox.check_finished", check=name, exit_code=exit_code)
 
     junit_put_url = os.environ.get(JUNIT_PUT_URL_ENV)
     if junit_put_url:

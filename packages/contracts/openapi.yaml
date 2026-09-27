@@ -564,6 +564,10 @@ components:
         plan_hash:
           type: string
           nullable: true
+        plan:
+          type: object
+          nullable: true
+          additionalProperties: true
         created_at:
           type: string
           format: date-time
@@ -732,6 +736,10 @@ components:
           items:
             type: string
         writable_paths:
+          type: array
+          items:
+            type: string
+        excluded_paths:
           type: array
           items:
             type: string

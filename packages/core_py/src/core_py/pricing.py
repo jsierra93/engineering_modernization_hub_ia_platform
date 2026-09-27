@@ -29,8 +29,22 @@ class UnknownModelPricingError(Exception):
     """Raised for a model_id with no configured rate."""
 
 
+_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
+
+
+def _bare_model_id(model_id: str) -> str:
+    """An inference-profile id ("us.anthropic.claude-...") bills at the
+    same rate as the model it routes to, so the prefix is not part of the
+    pricing key."""
+
+    for prefix in _PROFILE_PREFIXES:
+        if model_id.startswith(prefix):
+            return model_id[len(prefix) :]
+    return model_id
+
+
 def estimate_cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> float:
-    rate = _RATES_BY_MODEL_ID.get(model_id)
+    rate = _RATES_BY_MODEL_ID.get(_bare_model_id(model_id))
     if rate is None:
         raise UnknownModelPricingError(
             f"no pricing configured for model_id {model_id!r} -- add a rate to "

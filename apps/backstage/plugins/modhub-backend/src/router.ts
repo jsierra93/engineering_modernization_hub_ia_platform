@@ -24,6 +24,7 @@
 
 import { LoggerService } from '@backstage/backend-plugin-api';
 import { NotAllowedError } from '@backstage/errors';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import Router from 'express-promise-router';
 
@@ -33,7 +34,16 @@ export interface RouterOptions {
   devToken?: string;
 }
 
-function forwardedHeaders(req: express.Request, devToken?: string): HeadersInit {
+/**
+ * Extract or generate trace_id for distributed tracing.
+ * Follows W3C Trace Context convention (x-trace-id header).
+ * If x-trace-id header exists, use it; otherwise generate new UUID.
+ */
+function getOrGenerateTraceId(req: express.Request): string {
+  return req.header('x-trace-id') || randomUUID();
+}
+
+function forwardedHeaders(req: express.Request, devToken?: string, traceId?: string): HeadersInit {
   const authorization = devToken ? `Bearer ${devToken}` : req.header('authorization');
   if (!authorization) {
     throw new NotAllowedError('Missing Authorization header');
@@ -41,6 +51,7 @@ function forwardedHeaders(req: express.Request, devToken?: string): HeadersInit 
   return {
     authorization,
     'content-type': 'application/json',
+    'x-trace-id': traceId || randomUUID(),
   };
 }
 
@@ -51,15 +62,28 @@ export async function createRouter(
   const router = Router();
   router.use(express.json());
 
+  /**
+   * Middleware: Extract or generate trace_id and attach to request
+   * for propagation to downstream services.
+   */
+  router.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const traceId = getOrGenerateTraceId(req);
+    (req as any).traceId = traceId;
+    res.setHeader('x-trace-id', traceId);
+    logger.info(`[trace_id=${traceId}] ${req.method} ${req.path}`);
+    next();
+  });
+
   // Every route below is a thin, verbatim proxy onto modhub/v1's own
   // routes (packages/contracts/openapi.yaml) -- this plugin adds no
   // request/response shape of its own, so the frontend's ModhubClient
   // (plugins/modhub) and a direct call to modhub/v1 behave identically.
 
   router.post('/runs', async (req, res) => {
+    const traceId = (req as any).traceId;
     const upstream = await fetch(`${modhubBaseUrl}/modhub/v1/runs`, {
       method: 'POST',
-      headers: forwardedHeaders(req, devToken),
+      headers: forwardedHeaders(req, devToken, traceId),
       body: JSON.stringify(req.body),
     });
     const body = await upstream.text();
@@ -67,32 +91,35 @@ export async function createRouter(
   });
 
   router.get('/runs', async (req, res) => {
+    const traceId = (req as any).traceId;
     const qs = new URLSearchParams(
       req.query as Record<string, string>,
     ).toString();
     const upstream = await fetch(
       `${modhubBaseUrl}/modhub/v1/runs${qs ? `?${qs}` : ''}`,
-      { headers: forwardedHeaders(req, devToken) },
+      { headers: forwardedHeaders(req, devToken, traceId) },
     );
     const body = await upstream.text();
     res.status(upstream.status).type('application/json').send(body);
   });
 
   router.get('/runs/:runId', async (req, res) => {
+    const traceId = (req as any).traceId;
     const upstream = await fetch(
       `${modhubBaseUrl}/modhub/v1/runs/${req.params.runId}`,
-      { headers: forwardedHeaders(req, devToken) },
+      { headers: forwardedHeaders(req, devToken, traceId) },
     );
     const body = await upstream.text();
     res.status(upstream.status).type('application/json').send(body);
   });
 
   router.post('/runs/:runId/approval', async (req, res) => {
+    const traceId = (req as any).traceId;
     const upstream = await fetch(
       `${modhubBaseUrl}/modhub/v1/runs/${req.params.runId}/approval`,
       {
         method: 'POST',
-        headers: forwardedHeaders(req, devToken),
+        headers: forwardedHeaders(req, devToken, traceId),
         body: JSON.stringify(req.body),
       },
     );

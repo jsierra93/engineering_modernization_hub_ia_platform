@@ -41,6 +41,9 @@ class _FakeAgent:
         self.event_loop_metrics = SimpleNamespace(accumulated_usage={"inputTokens": 1000, "outputTokens": 200})
         self.model = SimpleNamespace(get_config=lambda: {"model_id": "anthropic.claude-haiku-4-5-20251001-v1:0"})
 
+    def __call__(self, prompt):
+        return None
+
     def structured_output(self, output_model, prompt=None):
         return self.response
 

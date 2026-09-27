@@ -16,6 +16,7 @@ import { Button, FormControlLabel, Switch } from '@material-ui/core';
 import { modhubApiRef } from '../../apis';
 import { Run } from '../../api/types';
 import { CreateRunDialog } from '../CreateRunDialog';
+import { ApprovalDialog } from '../ApprovalDialog';
 
 const columns: TableColumn<Run>[] = [
   { title: 'Objetivo', field: 'objetivo' },
@@ -30,6 +31,8 @@ const columns: TableColumn<Run>[] = [
   { title: 'Creado', field: 'created_at' },
 ];
 
+const AWAITING_APPROVAL = 'AWAITING_APPROVAL';
+
 /**
  * Fase 5, task 5.3. Reads real data from modhub/v1 (via modhub-backend's
  * proxy, task 5.2) -- no mock rows. `mine`/`status` filters mirror the
@@ -43,6 +46,7 @@ export const ModernizacionesPage = () => {
   const modhubApi = useApi(modhubApiRef);
   const [mineOnly, setMineOnly] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const [reviewing, setReviewing] = useState<Run | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const { value: runs, loading, error } = useAsync(
@@ -84,8 +88,24 @@ export const ModernizacionesPage = () => {
             options={{ search: true, paging: true, pageSize: 10 }}
             columns={columns}
             data={runs ?? []}
+            actions={[
+              (row: Run) => ({
+                icon: () => <Button size="small" color="primary">Revisar plan</Button>,
+                tooltip: 'Revisar y aprobar o rechazar el plan propuesto',
+                hidden: row.status !== AWAITING_APPROVAL,
+                onClick: () => setReviewing(row),
+              }),
+            ]}
           />
         )}
+        <ApprovalDialog
+          run={reviewing}
+          onClose={() => setReviewing(null)}
+          onDecided={() => {
+            setReviewing(null);
+            setRefreshKey(key => key + 1);
+          }}
+        />
         <CreateRunDialog
           open={createOpen}
           onClose={() => setCreateOpen(false)}

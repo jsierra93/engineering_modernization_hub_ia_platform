@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core_py.models import RunStatus
+from core_py.observability import log_event
 from core_py.persistence import BudgetExceededError, RunsTable
 
 from core_ops.plan_hash import compute_plan_hash
@@ -60,7 +61,9 @@ def _record_plan(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]
         raise ValueError(f"no such run: {run_id}")
 
     plan_hash = compute_plan_hash(event["plan"])
+    log_event("core_ops.plan_recorded", run_id=run_id, plan_hash=plan_hash)
     run.plan_hash = plan_hash
+    run.plan = event["plan"]
     run.status = RunStatus.AWAITING_APPROVAL
     runs_table.put(run)
 
@@ -101,6 +104,7 @@ def _record_spend(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any
     except BudgetExceededError:
         exhausted = True
 
+    log_event("core_ops.spend", run_id=run_id, delta_usd=event["delta_usd"], budget_exhausted=exhausted)
     return {"run_id": str(run_id), "budget_exhausted": exhausted}
 
 
@@ -136,6 +140,28 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
         diff_within_writable_paths=event.get("diff_within_writable_paths", True),
     )
     status = evaluate_verdict(inputs)
+
+    # Every input the verdict was computed from, so the decision is
+    # auditable without re-running it (CLAUDE.md invariant #1/#10).
+    log_event(
+        "core_ops.verdict",
+        run_id=run_id,
+        status=status.value,
+        spent_usd=run.spent_usd,
+        max_usd=run.max_usd,
+        elapsed_minutes=round(elapsed_minutes, 2),
+        max_minutes=run.max_minutes,
+        iterations_used=run.iterations_used,
+        max_iterations=run.max_iterations,
+        baseline_failed=inputs.baseline_failed,
+        agent_concluded_infeasible=inputs.agent_concluded_infeasible,
+        fix_iterations_exhausted=inputs.fix_iterations_exhausted_without_pass,
+        unrecoverable_error=inputs.unrecoverable_error,
+        suite_violation=violation,
+        checks=inputs.checks,
+        baseline_executed=baseline.executed,
+        final_executed=final.executed,
+    )
 
     run.status = status
     runs_table.put(run)

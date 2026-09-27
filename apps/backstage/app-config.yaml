@@ -158,9 +158,10 @@ proxy:
 # no service-level credential to modhub/v1 anywhere in this config.
 modhub:
   baseUrl: ${MODHUB_API_BASE_URL}
-  # Unset -> modhub-backend requires each caller's own Cognito token
-  # (real OIDC browser flow). Set -> it uses this token for every
-  # modhub/v1 request. start-backstage.sh mints one per target env.
+  # Unset -> each caller's own Cognito token is forwarded (the real OIDC
+  # flow, what `start-backstage.sh personal` does). Set -> that fixed token
+  # is used instead, which is the only way to reach the API on Floci, whose
+  # OIDC discovery document has no authorization_endpoint.
   devToken: ${MODHUB_DEV_TOKEN}
 
 # Reference documentation http://backstage.io/docs/features/techdocs/configuration
@@ -175,6 +176,11 @@ techdocs:
     type: 'local' # Alternatives - 'googleGcs' or 'awsS3'. Read documentation for using alternatives.
 
 auth:
+  # The oidc provider keeps state/nonce in a session; without a secret the
+  # auth backend never mounts the session middleware and every callback
+  # fails with "authentication requires session support".
+  session:
+    secret: ${AUTH_SESSION_SECRET}
   # see https://backstage.io/docs/auth/ to learn about auth providers
   providers:
     # See https://backstage.io/docs/auth/guest/provider
@@ -202,6 +208,9 @@ auth:
         clientId: ${AUTH_OIDC_CLIENT_ID}
         clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
         prompt: auto
+        signIn:
+          resolvers:
+            - resolver: emailMatchingUserEntityProfileEmail
   # see https://backstage.io/docs/ai/mcp-actions#client-id-metadata-documents
   # to learn more about client id metadata documents
   clientIdMetadataDocuments:
