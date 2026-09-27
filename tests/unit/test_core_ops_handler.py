@@ -43,6 +43,27 @@ def runs_table():
         yield table
 
 
+def test_record_spend_applies_the_delta_via_add_spend(runs_table):
+    """agent_phase reports cost_usd but has no DynamoDB access -- this is
+    the checkpoint that actually applies it to the budget ledger."""
+
+    result = _run({"action": "record_spend", "run_id": RUN_ID, "delta_usd": 0.5}, runs_table=runs_table)
+
+    assert result["budget_exhausted"] is False
+    assert runs_table.get(RUN_ID).spent_usd == pytest.approx(0.5)
+
+
+def test_record_spend_reports_exhaustion_without_raising(runs_table):
+    """max_usd is 2.0 (fixture) -- a delta that would exceed it must come
+    back as budget_exhausted, not propagate BudgetExceededError, so the
+    ASL can route it to PRESUPUESTO_AGOTADO via a Choice state."""
+
+    result = _run({"action": "record_spend", "run_id": RUN_ID, "delta_usd": 3.0}, runs_table=runs_table)
+
+    assert result["budget_exhausted"] is True
+    assert runs_table.get(RUN_ID).spent_usd == 0.0
+
+
 def test_record_task_token_persists_it_on_the_run(runs_table):
     """Fase 4 (4.3): AwaitApproval invokes this so a much later, separate
     Lambda invocation (POST /runs/{id}/approval) can retrieve the token

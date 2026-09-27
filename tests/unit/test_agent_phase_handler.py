@@ -6,6 +6,7 @@ Real S3 via moto (this Lambda has real, scoped IAM, unlike the sandbox)."""
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import boto3
 import pytest
@@ -35,6 +36,10 @@ class _FakeLambdaClient:
 class _FakeAgent:
     def __init__(self, response):
         self.response = response
+        # Stands in for the real strands.Agent's cost-tracking surface
+        # (handler.py reads these to report cost_usd -- see test_reports_cost_usd_from_token_usage below).
+        self.event_loop_metrics = SimpleNamespace(accumulated_usage={"inputTokens": 1000, "outputTokens": 200})
+        self.model = SimpleNamespace(get_config=lambda: {"model_id": "anthropic.claude-haiku-4-5-20251001-v1:0"})
 
     def structured_output(self, output_model, prompt=None):
         return self.response
@@ -153,3 +158,20 @@ def test_denials_from_the_gate_are_collected_and_returned(s3_resource, monkeypat
     assert result["denials"] == [
         {"tool_name": "write_file", "reason": "path escapes writable_paths", "attempted_path": "../evil.py"}
     ]
+
+
+def test_reports_cost_usd_from_token_usage(s3_resource):
+    """agent_phase has no DynamoDB access -- it reports cost_usd for
+    core_ops (record_spend) to apply, rather than spending it itself."""
+    plan = DiscoveryPlan(viable=True, viability_reason="x", summary="x")
+
+    result = _run(
+        {"run_id": "run-7", "phase": "discovery_plan", "strategy_id": "python-pydantic-v2", "objetivo": "x"},
+        s3_resource=s3_resource,
+        lambda_client=_FakeLambdaClient(),
+        build_agent_fn=_fake_build_agent_fn(plan),
+    )
+
+    # _FakeAgent reports 1000 input / 200 output tokens against Haiku's
+    # configured rate (core_py.pricing): 1.0*0.001 + 0.2*0.005 = 0.002.
+    assert result["cost_usd"] == pytest.approx(0.002)

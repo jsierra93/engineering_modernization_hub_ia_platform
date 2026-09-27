@@ -8,7 +8,6 @@ mock standing in for the whole thing."""
 
 from __future__ import annotations
 
-import pytest
 from strands.interventions import Deny, Proceed
 
 from agent_phase.agent_builder import build_agent
@@ -44,20 +43,18 @@ def test_build_agent_uses_the_resolved_model_id_and_temperature_zero():
     assert config["max_tokens"] == 4096
 
 
-def test_build_agent_raises_loudly_for_code_role_with_no_default_configured(monkeypatch):
-    """Confirms build_agent doesn't swallow bedrock_models' own fail-loud
-    behavior for the not-yet-qualified CODE role (Sonnet, PLAN.md 3.8)."""
+def test_build_agent_uses_the_configured_sonnet_id_for_code_role(monkeypatch):
     monkeypatch.delenv("BEDROCK_MODEL_CODE", raising=False)
     from core_py import ModelRole
 
-    with pytest.raises(ValueError, match="No Bedrock model configured"):
-        build_agent(
-            role=ModelRole.CODE,
-            max_tokens=8192,
-            workspace=_DictWorkspace(),
-            fetch_doc_fn=lambda url: "x",
-            writable_paths=["**/*.py"],
-        )
+    agent = build_agent(
+        role=ModelRole.CODE,
+        max_tokens=8192,
+        workspace=_DictWorkspace(),
+        fetch_doc_fn=lambda url: "x",
+        writable_paths=["**/*.py"],
+    )
+    assert agent.model.get_config()["model_id"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 
 def test_build_agent_wires_the_policy_gate_as_the_only_intervention():

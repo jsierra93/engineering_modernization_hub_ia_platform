@@ -163,6 +163,17 @@ def test_create_run_dev_strategy_bypass_misconfigured_returns_500(runs_table, sf
     assert payload["code"] == "DEV_STRATEGY_MISCONFIGURED"
 
 
+def test_create_run_request_limit_exceeding_strategy_max_returns_422(runs_table, sfn_client, bedrock_client):
+    """CLAUDE.md invariant #5: request <= strategy max. python-pydantic-v2's
+    own manifest caps max_usd at 5.0 (strategies/python_pydantic_v2/manifest.py)."""
+    response = create_run(_create_run_event(max_usd=999), runs_table, sfn_client, bedrock_client)
+
+    assert response["statusCode"] == 422
+    payload = json.loads(response["body"])
+    assert payload["code"] == "LIMIT_EXCEEDS_STRATEGY_MAX"
+    sfn_client.start_execution.assert_not_called()
+
+
 def test_list_runs_defaults_to_callers_own_runs(runs_table, sfn_client, bedrock_client):
     create_run(_create_run_event(), runs_table, sfn_client, bedrock_client)
     create_run(_create_run_event(), runs_table, sfn_client, bedrock_client)

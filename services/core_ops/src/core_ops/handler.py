@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core_py.models import RunStatus
-from core_py.persistence import RunsTable
+from core_py.persistence import BudgetExceededError, RunsTable
 
 from core_ops.plan_hash import compute_plan_hash
 from core_ops.suite_integrity import JUnitSummary, check_suite_integrity, parse_junit
@@ -82,6 +82,28 @@ def _resolve_junit_xml(event: dict[str, Any], *, key_field: str, xml_field: str,
     return s3_resource.Object(bucket, key).get()["Body"].read().decode("utf-8", errors="replace")
 
 
+def _record_spend(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
+    """Applies a Bedrock cost delta reported by agent_phase (which has no
+    DynamoDB access itself) to the run's budget ledger, via the same
+    atomic conditional update `add_spend` already provides (invariant #6).
+    A caught BudgetExceededError is reported, not raised, so the ASL can
+    route it to PRESUPUESTO_AGOTADO via a Choice state instead of an
+    unhandled Lambda failure."""
+
+    run_id = event["run_id"]
+    run = runs_table.get(run_id)
+    if run is None:
+        raise ValueError(f"no such run: {run_id}")
+
+    try:
+        runs_table.add_spend(run_id, event["delta_usd"], run.max_usd)
+        exhausted = False
+    except BudgetExceededError:
+        exhausted = True
+
+    return {"run_id": str(run_id), "budget_exhausted": exhausted}
+
+
 def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: Any = None) -> dict[str, Any]:
     run_id = event["run_id"]
     run = runs_table.get(run_id)
@@ -135,6 +157,8 @@ def _run(event: dict[str, Any], *, runs_table: RunsTable, s3_resource: Any = Non
         return _compute_verdict(event, runs_table, s3_resource=s3_resource)
     if action == "record_task_token":
         return _record_task_token(event, runs_table)
+    if action == "record_spend":
+        return _record_spend(event, runs_table)
     raise UnknownActionError(f"action {action!r} is not implemented")
 
 

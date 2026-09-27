@@ -34,6 +34,15 @@ APPROVAL_MAX_AUTH_AGE_SECONDS_ENV = "MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS"
 DEV_STRATEGY_ID_ENV = "MODHUB_DEV_STRATEGY_ID"
 DEFAULT_APPROVAL_MAX_AUTH_AGE_SECONDS = 300
 
+# CLAUDE.md invariant #5: request <= strategy max <= platform ceiling.
+# Registration (strategies_sdk.registry.StrategyRegistry.register) already
+# enforces strategy-max <= platform-ceiling; this is the remaining link --
+# a request may only tighten the resolved strategy's own max, never exceed
+# it. Duplicated as a plain loop here rather than importing
+# core_ops.limits.resolve_limits: api and core_ops are separately packaged
+# Lambdas (see api/strategy_lookup.py's own comment on this boundary).
+LIMIT_FIELDS = ("max_usd", "max_iterations", "max_minutes")
+
 
 def _error_response(status_code: int, code: str, message: str, run_id: str | None) -> dict[str, Any]:
     return {
@@ -148,6 +157,16 @@ def create_run(
                 422,
                 "NO_STRATEGY_MATCH",
                 "No registered strategy matches this objetivo.",
+                None,
+            )
+
+    for field in LIMIT_FIELDS:
+        limit_max = getattr(manifest.limits, field).max
+        if body[field] > limit_max:
+            return _error_response(
+                422,
+                "LIMIT_EXCEEDS_STRATEGY_MAX",
+                f"requested {field}={body[field]} exceeds strategy {manifest.id}'s max of {limit_max}.",
                 None,
             )
 

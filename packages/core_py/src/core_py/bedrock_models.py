@@ -36,15 +36,16 @@ _ENV_VAR_BY_ROLE: dict[ModelRole, str] = {
     ModelRole.CODE: "BEDROCK_MODEL_CODE",
 }
 
-# Defaults as of 2026-09-25. Update here -- or override per-environment
+# Defaults as of 2026-09-26. Update here -- or override per-environment
 # via the env vars above -- when a new model is qualified. Never
 # hardcode a Bedrock model ID anywhere else in the codebase; import
 # `resolve_model_id` instead.
+#
+# Bare IDs work on Floci and in tests; real AWS needs a region-prefixed
+# inference-profile ID, which Terraform injects via the env vars above.
 _DEFAULT_MODEL_BY_ROLE: dict[ModelRole, str | None] = {
     ModelRole.ANALYSIS: "anthropic.claude-haiku-4-5-20251001-v1:0",
-    # TODO(PLAN.md 3.4/3.8): set once Sonnet is qualified for the
-    # implementation/fix phases.
-    ModelRole.CODE: None,
+    ModelRole.CODE: "anthropic.claude-sonnet-4-5-20250929-v1:0",
 }
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from core_py import ModelRole
+from core_py import ModelRole, estimate_cost_usd
 
 from agent_phase.agent_builder import build_agent
 from agent_phase.fetch_doc_client import make_fetch_doc_fn
@@ -112,11 +112,22 @@ def _run(
     else:
         raise UnknownPhaseError(f"phase {phase!r} is not implemented")
 
+    # Reported, never spent here: agent_phase has no DynamoDB access
+    # (CLAUDE.md's permissions table) -- core_ops is what must apply this
+    # delta to the run's budget ledger via RunsTable.add_spend.
+    usage = agent.event_loop_metrics.accumulated_usage
+    cost_usd = estimate_cost_usd(
+        agent.model.get_config()["model_id"],
+        usage["inputTokens"],
+        usage["outputTokens"],
+    )
+
     return {
         "run_id": run_id,
         "phase": phase,
         "result": result.model_dump(mode="json"),
         "denials": denials,
+        "cost_usd": cost_usd,
         **handoff,
     }
 

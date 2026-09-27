@@ -7,6 +7,7 @@ for the API surface (see CLAUDE.md).
 """
 
 from core_py.bedrock_models import ModelRole, resolve_model_id
+from core_py.pricing import estimate_cost_usd
 from core_py.models import (
     ApprovalDecision,
     Event,
@@ -30,5 +31,6 @@ __all__ = [
     "StrategyLimits",
     "StrategyManifest",
     "StrategyModelLimits",
+    "estimate_cost_usd",
     "resolve_model_id",
 ]
