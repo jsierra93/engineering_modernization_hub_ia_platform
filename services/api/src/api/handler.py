@@ -299,6 +299,53 @@ def list_runs(
     )
 
 
+def get_report(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
+    """Handle `GET /modhub/v1/runs/{run_id}/report` -- what the run
+    delivers: the verdict core_ops computed, the diff it measured from S3,
+    and the agent's own narrative. Separate authors, one document
+    (CLAUDE.md invariant #10)."""
+
+    path_params = event.get("pathParameters") or {}
+    run_id = path_params.get("run_id")
+    if not run_id:
+        return _error_response(400, "MISSING_RUN_ID", "run_id path parameter is required.", None)
+
+    run = runs_table.get(run_id)
+    if run is None:
+        return _error_response(404, "RUN_NOT_FOUND", "No run with that id.", run_id)
+
+    plan = run.plan or {}
+    return _ok_response(
+        200,
+        {
+            "run_id": str(run.run_id),
+            "status": run.status.value,
+            "repo": run.repo,
+            "commit": run.commit,
+            "objetivo": run.objetivo,
+            "strategy": {"id": run.strategy_id, "version": run.strategy_version},
+            "verdict": {
+                "status": run.status.value,
+                "spent_usd": run.spent_usd,
+                "max_usd": run.max_usd,
+                "iterations_used": run.iterations_used,
+                "max_iterations": run.max_iterations,
+            },
+            "narrative": {
+                "summary": plan.get("summary"),
+                "viability_reason": plan.get("viability_reason"),
+                "sources": plan.get("sources", []),
+                "risks": plan.get("risks", []),
+            },
+            "changed_paths": run.changed_paths,
+            "diff": run.diff,
+            "models_used": run.models_used,
+            "plan_hash": run.plan_hash,
+            "created_at": run.created_at,
+        },
+    )
+
+
 def get_run(
     event: dict[str, Any],
     runs_table: RunsTable,
@@ -457,6 +504,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             response = create_run(event, runs_table, sfn_client)
         elif method == "POST" and path_params.get("run_id") and raw_path.endswith("/approval"):
             response = handle_approval(event, runs_table, sfn_client)
+        elif method == "GET" and path_params.get("run_id") and raw_path.endswith("/report"):
+            response = get_report(event, runs_table)
         elif method == "GET" and path_params.get("run_id"):
             response = get_run(event, runs_table)
         elif method == "GET" and "run_id" not in path_params:

@@ -23,7 +23,7 @@ from core_py import ModelRole, estimate_cost_usd, log_event, resolve_scope
 from agent_phase.agent_builder import build_agent
 from agent_phase.fetch_doc_client import make_fetch_doc_fn
 from agent_phase.phases import run_discovery_plan, run_fix, run_implement
-from agent_phase.sandbox_handoff import repackage_workspace_for_sandbox
+from agent_phase.sandbox_handoff import copy_version, repackage_workspace_for_sandbox
 from agent_phase.strategy_lookup import get_strategy_manifest
 from agent_phase.workspace import S3Workspace
 
@@ -31,6 +31,9 @@ WORKSPACE_BUCKET_ENV = "MODHUB_WORKSPACE_BUCKET"
 FETCH_DOC_FUNCTION_NAME_ENV = "MODHUB_FETCH_DOC_FUNCTION_NAME"
 GUARDRAIL_ID_ENV = "MODHUB_BEDROCK_GUARDRAIL_ID"
 GUARDRAIL_VERSION_ENV = "MODHUB_BEDROCK_GUARDRAIL_VERSION"
+
+BASELINE_VERSION = "v0"
+WORKING_VERSION = "v1"
 
 
 class UnknownPhaseError(Exception):
@@ -51,7 +54,8 @@ def _run(
 
     manifest = get_strategy_manifest(strategy_id)
     bucket = os.environ[WORKSPACE_BUCKET_ENV]
-    workspace = S3Workspace(s3_resource, bucket=bucket, run_id=run_id)
+    workspace_version = BASELINE_VERSION if phase == "discovery_plan" else WORKING_VERSION
+    workspace = S3Workspace(s3_resource, bucket=bucket, run_id=run_id, version=workspace_version)
     fetch_doc_fn = make_fetch_doc_fn(lambda_client, os.environ[FETCH_DOC_FUNCTION_NAME_ENV])
 
     denials: list[dict[str, Any]] = []
@@ -95,11 +99,16 @@ def _run(
         from agent_phase.schemas import DiscoveryPlan
 
         plan = DiscoveryPlan.model_validate(event["plan"])
+        copied = copy_version(s3_resource, bucket, run_id, BASELINE_VERSION, WORKING_VERSION)
+        log_event("agent_phase.workspace_snapshot", run_id=run_id, files=copied,
+                  frm=BASELINE_VERSION, to=WORKING_VERSION)
         result = run_implement(agent, plan=plan)
         # The workspace just changed -- Verify needs a fresh presigned
         # GET/PUT pair for the sandbox (which has zero AWS credentials,
         # CLAUDE.md invariant #8, and so cannot read S3 directly itself).
-        handoff = repackage_workspace_for_sandbox(s3_resource, bucket, run_id, junit_filename="verify.xml")
+        handoff = repackage_workspace_for_sandbox(
+            s3_resource, bucket, run_id, junit_filename="verify.xml", version=WORKING_VERSION
+        )
 
     elif phase == "fix":
         agent = build_agent_fn(role=ModelRole.CODE, max_tokens=manifest.model_limits.code_max_tokens, **common_kwargs)
@@ -113,7 +122,8 @@ def _run(
             max_iterations=event["max_iterations"],
         )
         handoff = repackage_workspace_for_sandbox(
-            s3_resource, bucket, run_id, junit_filename=f"verify_iter{event['iteration']}.xml"
+            s3_resource, bucket, run_id, junit_filename=f"verify_iter{event['iteration']}.xml",
+            version=WORKING_VERSION,
         )
 
     else:

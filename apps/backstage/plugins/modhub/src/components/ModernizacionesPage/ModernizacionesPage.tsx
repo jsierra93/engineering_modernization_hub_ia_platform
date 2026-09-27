@@ -18,10 +18,22 @@ import { modhubApiRef } from '../../apis';
 import { Run } from '../../api/types';
 import { CreateRunDialog } from '../CreateRunDialog';
 import { ApprovalDialog } from '../ApprovalDialog';
+import { ReportDialog } from '../ReportDialog';
 
 const AWAITING_APPROVAL = 'AWAITING_APPROVAL';
+const TERMINAL_STATES = [
+  'LISTO_PARA_REVISION',
+  'COMPLETADO_PARCIALMENTE',
+  'FALLIDO_CONTROLADO',
+  'BLOQUEADO',
+  'PRESUPUESTO_AGOTADO',
+  'CANCELADO',
+];
 
-const buildColumns = (onReview: (run: Run) => void): TableColumn<Run>[] => [
+const buildColumns = (
+  onReview: (run: Run) => void,
+  onReport: (runId: string) => void,
+): TableColumn<Run>[] => [
   { title: 'Objetivo', field: 'objetivo' },
   { title: 'Repo', field: 'repo' },
   { title: 'Estado', field: 'status' },
@@ -43,6 +55,17 @@ const buildColumns = (onReview: (run: Run) => void): TableColumn<Run>[] => [
         </Button>
       ) : null,
   },
+  {
+    title: 'Informe',
+    field: 'run_id',
+    sorting: false,
+    render: (row: Run) =>
+      TERMINAL_STATES.includes(row.status) ? (
+        <Button size="small" color="primary" onClick={() => onReport(row.run_id)}>
+          Ver informe
+        </Button>
+      ) : null,
+  },
 ];
 
 
@@ -60,6 +83,7 @@ export const ModernizacionesPage = () => {
   const [mineOnly, setMineOnly] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [reviewing, setReviewing] = useState<Run | null>(null);
+  const [reportRunId, setReportRunId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const { lastSignal } = useSignal<{ event_type: string; run_id: string }>('modhub:runs');
@@ -107,10 +131,11 @@ export const ModernizacionesPage = () => {
           <Table
             title="Solicitudes"
             options={{ search: true, paging: true, pageSize: 10 }}
-            columns={buildColumns(setReviewing)}
+            columns={buildColumns(setReviewing, setReportRunId)}
             data={runs ?? []}
           />
         )}
+        <ReportDialog runId={reportRunId} onClose={() => setReportRunId(null)} />
         <ApprovalDialog
           run={reviewing}
           onClose={() => setReviewing(null)}

@@ -4,7 +4,7 @@ import {
   CreateRunInput,
   CreateRunResponse,
   ModhubApi,
-  Run,
+  Report, Run,
 } from './types';
 import { ModhubTokenProvider } from './tokenProvider';
 
@@ -61,6 +61,27 @@ export class ModhubClient implements ModhubApi {
 
   async getRun(runId: string): Promise<Run> {
     const response = await fetch(`${await this.baseUrl()}/runs/${runId}`, {
+      headers: await this.authHeader(),
+    });
+    if (!response.ok) {
+      throw await this.toError(response);
+    }
+    return response.json();
+  }
+
+  async getReport(runId: string): Promise<Report> {
+    const response = await fetch(`${await this.baseUrl()}/runs/${runId}/report`, {
+      headers: await this.authHeader(),
+    });
+    if (!response.ok) {
+      throw await this.toError(response);
+    }
+    return response.json();
+  }
+
+  async openPullRequest(runId: string): Promise<{ pull_request_url: string; branch: string }> {
+    const response = await fetch(`${await this.baseUrl()}/runs/${runId}/pull-request`, {
+      method: 'POST',
       headers: await this.authHeader(),
     });
     if (!response.ok) {

@@ -231,6 +231,15 @@ resource "aws_apigatewayv2_route" "get_run" {
   authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
 }
 
+resource "aws_apigatewayv2_route" "get_report" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "GET /modhub/v1/runs/{run_id}/report"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+
+  authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
+  authorizer_id      = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+}
+
 resource "aws_apigatewayv2_route" "list_runs" {
   api_id    = aws_apigatewayv2_api.http_api.id
   route_key = "GET /modhub/v1/runs"
@@ -279,6 +288,36 @@ resource "aws_lambda_permission" "apigw_invoke" {
   statement_id  = "AllowAPIGatewayInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
+}
+
+resource "aws_apigatewayv2_integration" "open_pr" {
+  count = var.enable_open_pr_route ? 1 : 0
+
+  api_id                 = aws_apigatewayv2_api.http_api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = var.open_pr_lambda_invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "open_pr" {
+  count = var.enable_open_pr_route ? 1 : 0
+
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "POST /modhub/v1/runs/{run_id}/pull-request"
+  target    = "integrations/${aws_apigatewayv2_integration.open_pr[0].id}"
+
+  authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
+  authorizer_id      = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+}
+
+resource "aws_lambda_permission" "open_pr_apigw_invoke" {
+  count = var.enable_open_pr_route ? 1 : 0
+
+  statement_id  = "AllowAPIGatewayInvokeOpenPr"
+  action        = "lambda:InvokeFunction"
+  function_name = var.open_pr_lambda_function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
 }

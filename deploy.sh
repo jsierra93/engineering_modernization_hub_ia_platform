@@ -50,7 +50,16 @@ cd "${REPO_ROOT}"
 for SERVICE in "${SERVICES[@]:-}"; do
   [[ -n "${SERVICE}" ]] || continue
   step "Building ${SERVICE}"
-  bash infrastructure/scripts/build_lambda.sh "" x86_64 "${SERVICE}" 2>&1 | grep -E "^==> (Zipping|Done)|error" || die "build failed: ${SERVICE}"
+  BUILD_LOG="$(mktemp)"
+  if bash infrastructure/scripts/build_lambda.sh "" x86_64 "${SERVICE}" >"${BUILD_LOG}" 2>&1; then
+    grep -E "^==> Done" "${BUILD_LOG}" || true
+    rm -f "${BUILD_LOG}"
+  else
+    echo "--- last 30 lines ---"
+    tail -30 "${BUILD_LOG}"
+    rm -f "${BUILD_LOG}"
+    die "build failed: ${SERVICE}"
+  fi
 done
 
 if [[ -n "${SANDBOX_TAG}" ]]; then
@@ -74,7 +83,14 @@ fi
 
 step "terraform plan (${ENV_DIR})"
 cd "${ENV_DIR}"
-"${TF}" plan -no-color -out=tfplan.out | grep -E "^Plan:|No changes|will be (created|destroyed|updated)|must be replaced" | sed 's/^  # //'
+PLAN_LOG="$(mktemp)"
+if ! "${TF}" plan -no-color -out=tfplan.out >"${PLAN_LOG}" 2>&1; then
+  tail -40 "${PLAN_LOG}"
+  rm -f "${PLAN_LOG}"
+  die "terraform plan failed"
+fi
+grep -E "^Plan:|No changes|will be (created|destroyed|updated)|must be replaced" "${PLAN_LOG}" | sed 's/^  # //'
+rm -f "${PLAN_LOG}"
 
 if [[ "${PLAN_ONLY}" == "1" ]]; then
   echo

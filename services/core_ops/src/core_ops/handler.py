@@ -22,6 +22,7 @@ from core_py.observability import log_event
 from core_py.models import Event
 from core_py.persistence import EventsTable, RunsTable
 
+from core_ops.diff import compute_diff
 from core_ops.plan_hash import compute_plan_hash
 from core_ops.suite_integrity import JUnitSummary, check_suite_integrity, parse_junit
 from core_ops.verdict import BudgetStatus, VerdictInputs, evaluate_verdict
@@ -205,6 +206,12 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
         baseline_executed=baseline.executed,
         final_executed=final.executed,
     )
+
+    bucket = event.get("workspaces_bucket")
+    if bucket and s3_resource is not None:
+        run.diff, run.changed_paths = compute_diff(s3_resource, bucket, str(run_id))
+        log_event("core_ops.diff", run_id=run_id, changed_paths=run.changed_paths,
+                  diff_chars=len(run.diff or ""))
 
     run.status = status
     runs_table.put(run)

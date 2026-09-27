@@ -74,3 +74,22 @@ def repackage_workspace_for_sandbox(
         "junit_key": junit_key,
         "bucket": bucket,
     }
+
+
+def copy_version(s3_resource: Any, bucket: str, run_id: str, src: str, dst: str) -> int:
+    """Snapshot one workspace version into another, so the agent writes to a
+    copy and the version it started from stays readable. Without this the
+    original is overwritten and no diff of the run is possible afterwards."""
+
+    bucket_resource = s3_resource.Bucket(bucket)
+    src_prefix = f"ws/{run_id}/{src}/"
+    dst_prefix = f"ws/{run_id}/{dst}/"
+
+    copied = 0
+    for obj in bucket_resource.objects.filter(Prefix=src_prefix):
+        rel_path = obj.key[len(src_prefix) :]
+        if not rel_path:
+            continue
+        bucket_resource.copy({"Bucket": bucket, "Key": obj.key}, f"{dst_prefix}{rel_path}")
+        copied += 1
+    return copied

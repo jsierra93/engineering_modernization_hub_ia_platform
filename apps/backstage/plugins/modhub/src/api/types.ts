@@ -65,9 +65,38 @@ export interface CreateRunResponse {
   created_at: string;
 }
 
+export interface Report {
+  run_id: string;
+  status: string;
+  repo: string;
+  commit: string;
+  objetivo: string;
+  strategy: { id: string; version: string };
+  verdict: {
+    status: string;
+    spent_usd: number;
+    max_usd: number;
+    iterations_used: number;
+    max_iterations: number;
+  };
+  narrative: {
+    summary?: string;
+    viability_reason?: string;
+    sources?: string[];
+    risks?: string[];
+  };
+  changed_paths: string[];
+  diff?: string | null;
+  models_used: Record<string, string>;
+  plan_hash?: string | null;
+  created_at: string;
+}
+
 export interface ModhubApi {
   createRun(input: CreateRunInput): Promise<CreateRunResponse>;
   listRuns(params?: { mine?: boolean; status?: string }): Promise<Run[]>;
+  getReport(runId: string): Promise<Report>;
+  openPullRequest(runId: string): Promise<{ pull_request_url: string; branch: string }>;
   getRun(runId: string): Promise<Run>;
   approve(runId: string, input: ApprovalInput): Promise<Run>;
 }

@@ -29,7 +29,7 @@
 # Usage:
 #   infrastructure/scripts/build_lambda.sh [output_zip_path] [arch] [service]
 #   arch:    arm64 (default) | x86_64
-#   service: api (default) | fetch_repo | core_ops | fetch_doc | agent_phase
+#   service: api (default) | fetch_repo | core_ops | fetch_doc | agent_phase | open_pr
 #
 # Default output: infrastructure/scripts/build/<service>_lambda_<arch>.zip
 # -- the architecture is part of the default filename on purpose: building
@@ -107,8 +107,14 @@ case "${SERVICE}" in
     # newer strands-agents than what was actually tested against.
     THIRD_PARTY_DEPS=("strands-agents==1.57.1" "pydantic>=2.7" "boto3>=1.34")
     ;;
+  open_pr)
+    SERVICE_SRC="${REPO_ROOT}/services/open_pr/src/open_pr"
+    SERVICE_PKG_NAME="open_pr"
+    WORKSPACE_PACKAGES=("${REPO_ROOT}/packages/core_py/src/core_py:core_py")
+    THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34" "requests>=2.31")
+    ;;
   *)
-    echo "error: unsupported service '${SERVICE}' -- use api, fetch_repo, core_ops, fetch_doc or agent_phase" >&2
+    echo "error: unsupported service '${SERVICE}' -- use api, fetch_repo, core_ops, fetch_doc, agent_phase or open_pr" >&2
     exit 1
     ;;
 esac

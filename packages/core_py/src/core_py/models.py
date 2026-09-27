@@ -96,6 +96,10 @@ class Run(BaseModel):
     """How long the run sat waiting for a human. Subtracted from elapsed
     time when the verdict is computed: max_minutes bounds the work, not the
     deliberation."""
+    diff: str | None = None
+    """Unified diff v0 -> v1, computed by core_ops from S3. The agent's own
+    account of what it changed is in `plan`; this is what it actually did."""
+    changed_paths: list[str] = Field(default_factory=list)
     plan: dict[str, Any] | None = None
     """The DiscoveryPlan the agent proposed, as approved-or-not. Persisted
     so a human can read what they are approving -- an approval against a

@@ -16,6 +16,7 @@ locals {
   core_ops_package_path    = "${path.module}/../../scripts/build/core_ops_lambda_x86_64.zip"
   fetch_doc_package_path   = "${path.module}/../../scripts/build/fetch_doc_lambda_x86_64.zip"
   agent_phase_package_path = "${path.module}/../../scripts/build/agent_phase_lambda_x86_64.zip"
+  open_pr_package_path     = "${path.module}/../../scripts/build/open_pr_lambda_x86_64.zip"
 
   lambda_architectures = ["x86_64"]
 
@@ -105,9 +106,27 @@ module "api" {
   aws_region              = var.aws_region
   analysis_model_id       = local.analysis_model_id
 
+  enable_open_pr_route         = true
+  open_pr_lambda_invoke_arn    = module.open_pr.lambda_invoke_arn
+  open_pr_lambda_function_name = module.open_pr.lambda_function_name
+
   enable_jwt_authorizer = true
   jwt_issuer             = module.identity.issuer_url
   jwt_audience           = [module.identity.cli_client_id, module.identity.backstage_client_id]
+}
+
+module "open_pr" {
+  source = "../../modules/open-pr"
+
+  name_prefix             = local.name_prefix
+  tags                    = local.common_tags
+  runs_table_name         = module.persistence.runs_table_name
+  runs_table_arn          = module.persistence.runs_table_arn
+  workspaces_bucket_name  = module.persistence.workspaces_bucket_name
+  workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
+  github_token_secret_arn = module.fetch_repo.github_token_secret_arn
+  lambda_package_zip_path = local.open_pr_package_path
+  lambda_architectures    = local.lambda_architectures
 }
 
 module "fetch_repo" {

@@ -134,3 +134,20 @@ variable "jwt_audience" {
   type        = list(string)
   default     = []
 }
+
+variable "open_pr_lambda_invoke_arn" {
+  description = "Set to route POST /runs/{run_id}/pull-request at the open-pr Lambda. That Lambda is the only component that writes outside the platform, so it is deliberately a separate target rather than another branch inside lambda api."
+  type        = string
+  default     = null
+}
+
+variable "open_pr_lambda_function_name" {
+  type    = string
+  default = null
+}
+
+variable "enable_open_pr_route" {
+  description = "Separate from the ARN variables because count must be resolvable at plan time, and those ARNs come from another module."
+  type        = bool
+  default     = false
+}

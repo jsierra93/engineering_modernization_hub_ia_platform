@@ -1,0 +1,20 @@
+[project]
+name = "open-pr"
+version = "0.1.0"
+description = "lambda open_pr -- allowlisted official sources, zero AWS permissions"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "requests>=2.31",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/open_pr"]
+
+[dependency-groups]
+dev = [
+    "responses>=0.25",
+]
