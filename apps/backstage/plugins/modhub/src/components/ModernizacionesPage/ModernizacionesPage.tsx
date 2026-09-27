@@ -19,7 +19,9 @@ import { Run } from '../../api/types';
 import { CreateRunDialog } from '../CreateRunDialog';
 import { ApprovalDialog } from '../ApprovalDialog';
 
-const columns: TableColumn<Run>[] = [
+const AWAITING_APPROVAL = 'AWAITING_APPROVAL';
+
+const buildColumns = (onReview: (run: Run) => void): TableColumn<Run>[] => [
   { title: 'Objetivo', field: 'objetivo' },
   { title: 'Repo', field: 'repo' },
   { title: 'Estado', field: 'status' },
@@ -30,9 +32,19 @@ const columns: TableColumn<Run>[] = [
     render: (row: Run) => `$${row.spent_usd.toFixed(2)} / $${row.max_usd.toFixed(2)}`,
   },
   { title: 'Creado', field: 'created_at' },
+  {
+    title: 'Plan',
+    field: 'plan_hash',
+    sorting: false,
+    render: (row: Run) =>
+      row.plan ? (
+        <Button size="small" color="primary" onClick={() => onReview(row)}>
+          {row.status === AWAITING_APPROVAL ? 'Revisar y aprobar' : 'Ver plan'}
+        </Button>
+      ) : null,
+  },
 ];
 
-const AWAITING_APPROVAL = 'AWAITING_APPROVAL';
 
 /**
  * Fase 5, task 5.3. Reads real data from modhub/v1 (via modhub-backend's
@@ -95,16 +107,8 @@ export const ModernizacionesPage = () => {
           <Table
             title="Solicitudes"
             options={{ search: true, paging: true, pageSize: 10 }}
-            columns={columns}
+            columns={buildColumns(setReviewing)}
             data={runs ?? []}
-            actions={[
-              (row: Run) => ({
-                icon: () => <Button size="small" color="primary">Revisar plan</Button>,
-                tooltip: 'Revisar y aprobar o rechazar el plan propuesto',
-                hidden: row.status !== AWAITING_APPROVAL,
-                onClick: () => setReviewing(row),
-              }),
-            ]}
           />
         )}
         <ApprovalDialog

@@ -31,6 +31,7 @@ export const ApprovalDialog = ({ run, onClose, onDecided }: Props) => {
   }
 
   const plan = run.plan ?? null;
+  const decidable = run.status === 'AWAITING_APPROVAL';
 
   const decide = async (decision: 'approve' | 'reject') => {
     if (!run.plan_hash) {
@@ -55,7 +56,9 @@ export const ApprovalDialog = ({ run, onClose, onDecided }: Props) => {
 
   return (
     <Dialog open onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>Revisar plan de modernización</DialogTitle>
+      <DialogTitle>
+        {decidable ? 'Revisar plan de modernización' : `Plan del run (${run.status})`}
+      </DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="textSecondary">
           {run.repo} @ {run.commit.slice(0, 12)}
@@ -138,6 +141,7 @@ export const ApprovalDialog = ({ run, onClose, onDecided }: Props) => {
           aprobación quedaría obsoleta y sería rechazada.
         </Typography>
 
+        {decidable && (
         <TextField
           label="Motivo (obligatorio al rechazar)"
           fullWidth
@@ -147,6 +151,7 @@ export const ApprovalDialog = ({ run, onClose, onDecided }: Props) => {
           onChange={event => setReason(event.target.value)}
           style={{ marginTop: 16 }}
         />
+        )}
 
         {error && (
           <Typography variant="body2" color="error" style={{ marginTop: 8 }}>
@@ -156,23 +161,27 @@ export const ApprovalDialog = ({ run, onClose, onDecided }: Props) => {
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={submitting}>
-          Cancelar
+          {decidable ? 'Cancelar' : 'Cerrar'}
         </Button>
-        <Button
-          onClick={() => decide('reject')}
-          disabled={submitting || !reason}
-          color="secondary"
-        >
-          Rechazar
-        </Button>
-        <Button
-          onClick={() => decide('approve')}
-          disabled={submitting}
-          color="primary"
-          variant="contained"
-        >
-          Aprobar
-        </Button>
+        {decidable && (
+          <>
+            <Button
+              onClick={() => decide('reject')}
+              disabled={submitting || !reason}
+              color="secondary"
+            >
+              Rechazar
+            </Button>
+            <Button
+              onClick={() => decide('approve')}
+              disabled={submitting}
+              color="primary"
+              variant="contained"
+            >
+              Aprobar
+            </Button>
+          </>
+        )}
       </DialogActions>
     </Dialog>
   );
