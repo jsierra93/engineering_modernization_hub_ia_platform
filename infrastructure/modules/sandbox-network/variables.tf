@@ -88,3 +88,9 @@ variable "log_retention_days" {
   type        = number
   default     = 14
 }
+
+variable "ecr_force_delete" {
+  description = "Allow Terraform to delete the sandbox ECR repository even if it still holds images. Convenient for a throwaway prototype env; leave false anywhere images matter."
+  type        = bool
+  default     = false
+}

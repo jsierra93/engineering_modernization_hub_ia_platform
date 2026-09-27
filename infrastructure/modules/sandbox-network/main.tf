@@ -102,6 +102,7 @@ resource "aws_security_group" "sandbox" {
 resource "aws_ecr_repository" "sandbox" {
   name                 = "${var.name_prefix}-sandbox"
   image_tag_mutability = "IMMUTABLE"
+  force_delete         = var.ecr_force_delete
 
   image_scanning_configuration {
     scan_on_push = true

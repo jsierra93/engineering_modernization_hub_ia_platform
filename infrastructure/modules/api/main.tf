@@ -29,10 +29,20 @@ locals {
   # Fase 4, task 4.4-tf: the one documented Bedrock exception (see
   # CLAUDE.md) -- scoped to exactly the ANALYSIS model create_run's
   # resolver actually invokes, never bedrock:* across every model.
-  analysis_model_arn = "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}::foundation-model/${var.analysis_model_id}"
+  # Two ARNs when the ID is an inference profile -- see
+  # modules/agent-phase/main.tf.
+  analysis_model_bare_id = replace(var.analysis_model_id, "/^(us|eu|apac|global)\\./", "")
+
+  analysis_model_arns = compact([
+    "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${local.analysis_model_bare_id}",
+    local.analysis_model_bare_id != var.analysis_model_id
+    ? "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.analysis_model_id}"
+    : "",
+  ])
 }
 
 data "aws_partition" "current" {}
+data "aws_caller_identity" "current" {}
 
 data "archive_file" "lambda_package" {
   count = local.use_prebuilt_zip ? 0 : 1
@@ -113,7 +123,7 @@ data "aws_iam_policy_document" "api_lambda_scope" {
     # Scoped to exactly the ANALYSIS model -- this Lambda gets no other
     # Bedrock permission, ever.
     actions   = ["bedrock:InvokeModel"]
-    resources = [local.analysis_model_arn]
+    resources = local.analysis_model_arns
   }
 }
 
@@ -154,6 +164,8 @@ resource "aws_lambda_function" "api" {
         # STATE_MACHINE_ARN_ENV constant exactly - do not rename without
         # checking that file (owned by the Python agent, read-only here).
         MODHUB_STATE_MACHINE_ARN = var.state_machine_arn
+        # Same var that scopes the InvokeModel policy above.
+        BEDROCK_MODEL_ANALYSIS = var.analysis_model_id
       },
       var.extra_environment_variables
     )

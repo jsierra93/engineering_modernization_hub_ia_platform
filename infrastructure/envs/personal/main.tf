@@ -9,14 +9,20 @@
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 
-  # arm64 in every filename -- this env builds for real AWS (Graviton2
-  # default, no override), envs/local's equivalents build the x86_64
-  # versions of the same services for Floci; both coexist on disk.
-  api_package_path         = "${path.module}/../../scripts/build/api_lambda_arm64.zip"
-  fetch_repo_package_path  = "${path.module}/../../scripts/build/fetch_repo_lambda_arm64.zip"
-  core_ops_package_path    = "${path.module}/../../scripts/build/core_ops_lambda_arm64.zip"
-  fetch_doc_package_path   = "${path.module}/../../scripts/build/fetch_doc_lambda_arm64.zip"
-  agent_phase_package_path = "${path.module}/../../scripts/build/agent_phase_lambda_arm64.zip"
+  # x86_64, not the modules' arm64 default: build_lambda.sh's arm64 cross
+  # build silently drops dependencies under QEMU on an x86 host.
+  api_package_path         = "${path.module}/../../scripts/build/api_lambda_x86_64.zip"
+  fetch_repo_package_path  = "${path.module}/../../scripts/build/fetch_repo_lambda_x86_64.zip"
+  core_ops_package_path    = "${path.module}/../../scripts/build/core_ops_lambda_x86_64.zip"
+  fetch_doc_package_path   = "${path.module}/../../scripts/build/fetch_doc_lambda_x86_64.zip"
+  agent_phase_package_path = "${path.module}/../../scripts/build/agent_phase_lambda_x86_64.zip"
+
+  lambda_architectures = ["x86_64"]
+
+  # Inference-profile ids, not bare model ids: Claude 4.5 models report no
+  # ON_DEMAND support, so InvokeModel against a bare id fails.
+  analysis_model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  code_model_id     = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
   common_tags = {
     Project     = "engineering-modernization-hub"
@@ -30,6 +36,9 @@ module "persistence" {
 
   name_prefix = local.name_prefix
   tags        = local.common_tags
+  # Throwaway demo env: the whole thing must stay destroyable after runs
+  # have written workspace artifacts.
+  s3_force_destroy = true
 }
 
 module "sandbox_network" {
@@ -38,8 +47,8 @@ module "sandbox_network" {
   name_prefix = local.name_prefix
   tags        = local.common_tags
   aws_region  = var.aws_region
-  # sandbox_architecture defaults to "arm64" (real-AWS default) - not
-  # overridden here, only in envs/local.
+  sandbox_architecture = "x86_64"
+  ecr_force_delete     = true
 }
 
 module "notifications" {
@@ -86,6 +95,7 @@ module "api" {
   runs_table_arn          = module.persistence.runs_table_arn
   state_machine_arn       = module.orchestration.state_machine_arn
   lambda_package_zip_path = local.api_package_path
+  lambda_architectures    = local.lambda_architectures
   aws_region              = var.aws_region
 
   enable_jwt_authorizer = true
@@ -101,6 +111,7 @@ module "fetch_repo" {
   workspaces_bucket_name  = module.persistence.workspaces_bucket_name
   workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
   lambda_package_zip_path = local.fetch_repo_package_path
+  lambda_architectures    = local.lambda_architectures
 }
 
 module "core_ops" {
@@ -114,6 +125,7 @@ module "core_ops" {
   events_table_arn        = module.persistence.events_table_arn
   workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
   lambda_package_zip_path = local.core_ops_package_path
+  lambda_architectures    = local.lambda_architectures
 }
 
 module "fetch_doc" {
@@ -122,6 +134,7 @@ module "fetch_doc" {
   name_prefix             = local.name_prefix
   tags                    = local.common_tags
   lambda_package_zip_path = local.fetch_doc_package_path
+  lambda_architectures    = local.lambda_architectures
 }
 
 module "agent_phase" {
@@ -134,8 +147,8 @@ module "agent_phase" {
   workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
   fetch_doc_lambda_arn    = module.fetch_doc.lambda_function_arn
   fetch_doc_lambda_name   = module.fetch_doc.lambda_function_name
-  analysis_model_id       = "anthropic.claude-haiku-4-5-20251001-v1:0"
+  analysis_model_id       = local.analysis_model_id
+  code_model_id           = local.code_model_id
   lambda_package_zip_path = local.agent_phase_package_path
-  # create_guardrail defaults to true here -- a real Bedrock Guardrail
-  # (task 3.7-tf) is created for real AWS, unlike envs/local.
+  lambda_architectures    = local.lambda_architectures
 }

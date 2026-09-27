@@ -12,11 +12,14 @@ terraform {
     }
   }
 
-  # Local state is fine for this prototype - a single personal account, a
-  # single operator, no team coordination to protect against. Revisit if
-  # this ever needs to be applied from more than one machine.
-  backend "local" {
-    path = "terraform.tfstate"
+  # Remote state so the whole environment stays destroyable from any machine
+  # after the demo. No dynamodb_table: state locking would need one on
+  # Terraform 1.8, and this is a single-operator account.
+  backend "s3" {
+    bucket  = "engineering-modernization-hub-tf-state"
+    key     = "personal/terraform.tfstate"
+    region  = "us-east-2"
+    encrypt = true
   }
 }
 

@@ -97,10 +97,67 @@
         }
       },
       "ResultSelector": {
-        "plan.$": "$.Payload.result"
+        "plan.$": "$.Payload.result",
+        "cost_usd.$": "$.Payload.cost_usd"
       },
       "ResultPath": "$.discovery_plan_result",
-      "Next": "RecordPlan"
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.agent_error",
+          "Next": "RecordUnrecoverableVerdict"
+        }
+      ],
+      "Next": "RecordDiscoveryPlanSpend"
+    },
+
+    "RecordDiscoveryPlanSpend": {
+      "Type": "Task",
+      "Comment": "agent_phase has no DynamoDB access (CLAUDE.md permissions table) -- it reports cost_usd, core_ops.record_spend applies it atomically to the run's budget ledger (invariant #6). Not gated on budget_exhausted here: the final compute_verdict re-derives PRESUPUESTO_AGOTADO from the persisted spent_usd regardless, so an early stop is a cost optimization, not a correctness requirement.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "record_spend",
+          "run_id.$": "$.run_id",
+          "delta_usd.$": "$.discovery_plan_result.cost_usd"
+        }
+      },
+      "ResultPath": "$.spend_result",
+      "Next": "CheckViability"
+    },
+
+    "CheckViability": {
+      "Type": "Choice",
+      "Comment": "CLAUDE.md invariant #11: a reasoned 'this cannot be done' is BLOQUEADO with evidence, never silently proceeding to approval/implementation.",
+      "Choices": [
+        {
+          "Variable": "$.discovery_plan_result.plan.viable",
+          "BooleanEquals": false,
+          "Next": "RecordInfeasibleVerdict"
+        }
+      ],
+      "Default": "RecordPlan"
+    },
+
+    "RecordInfeasibleVerdict": {
+      "Type": "Task",
+      "Comment": "The agent concluded the objective is infeasible during DiscoveryPlan (substantiated by plan.viability_reason, persisted via the phase's own S3 trail) -- BLOQUEADO via evaluate_verdict's agent_concluded_infeasible flag, never inferred, per invariant #11.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.fetch_repo_result.junit_key",
+          "agent_concluded_infeasible": true,
+          "checks": {}
+        }
+      },
+      "ResultPath": "$.verdict_result",
+      "End": true
     },
 
     "RecordPlan": {
@@ -175,9 +232,33 @@
         "workspace_get_url.$": "$.Payload.workspace_get_url",
         "junit_put_url.$": "$.Payload.junit_put_url",
         "junit_key.$": "$.Payload.junit_key",
-        "bucket.$": "$.Payload.bucket"
+        "bucket.$": "$.Payload.bucket",
+        "cost_usd.$": "$.Payload.cost_usd"
       },
       "ResultPath": "$.implement_result",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.agent_error",
+          "Next": "RecordUnrecoverableVerdict"
+        }
+      ],
+      "Next": "RecordImplementSpend"
+    },
+
+    "RecordImplementSpend": {
+      "Type": "Task",
+      "Comment": "Same pattern as RecordDiscoveryPlanSpend, for the Sonnet/ModelRole.CODE call in Implement.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "record_spend",
+          "run_id.$": "$.run_id",
+          "delta_usd.$": "$.implement_result.cost_usd"
+        }
+      },
+      "ResultPath": "$.spend_result",
       "Next": "Verify"
     },
 
@@ -252,9 +333,33 @@
         "workspace_get_url.$": "$.Payload.workspace_get_url",
         "junit_put_url.$": "$.Payload.junit_put_url",
         "junit_key.$": "$.Payload.junit_key",
-        "bucket.$": "$.Payload.bucket"
+        "bucket.$": "$.Payload.bucket",
+        "cost_usd.$": "$.Payload.cost_usd"
       },
       "ResultPath": "$.implement_result",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.agent_error",
+          "Next": "RecordUnrecoverableVerdict"
+        }
+      ],
+      "Next": "RecordFixSpend"
+    },
+
+    "RecordFixSpend": {
+      "Type": "Task",
+      "Comment": "Same pattern as RecordDiscoveryPlanSpend, for each fix-loop Sonnet call.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "record_spend",
+          "run_id.$": "$.run_id",
+          "delta_usd.$": "$.implement_result.cost_usd"
+        }
+      },
+      "ResultPath": "$.spend_result",
       "Next": "IncrementIteration"
     },
 
@@ -265,6 +370,26 @@
       },
       "ResultPath": "$.iteration",
       "Next": "Verify"
+    },
+
+    "RecordUnrecoverableVerdict": {
+      "Type": "Task",
+      "Comment": "CLAUDE.md invariant #11: an unhandled agent_phase error (e.g. a Bedrock ThrottlingException, a real possibility once this runs against live Bedrock) is FALLIDO_CONTROLADO with the technical error persisted -- never an opaque failed Step Functions execution the run's own record never reflects, and never inferred as BLOQUEADO (that requires the agent's own substantiated conclusion, not an infra error). Reuses fetch_repo_result.junit_key for both baseline/final: no later JUnit necessarily exists yet, and unrecoverable_error short-circuits evaluate_verdict ahead of the checks/suite-integrity logic anyway.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.fetch_repo_result.junit_key",
+          "unrecoverable_error": true,
+          "checks": {}
+        }
+      },
+      "ResultPath": "$.verdict_result",
+      "End": true
     },
 
     "ComputeExhaustedVerdict": {

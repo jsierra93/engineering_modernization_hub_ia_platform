@@ -18,10 +18,19 @@ data "aws_partition" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  model_arns = compact([
-    "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}::foundation-model/${var.analysis_model_id}",
-    var.code_model_id == null ? "" : "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}::foundation-model/${var.code_model_id}",
-  ])
+  # Claude 4.5 models are INFERENCE_PROFILE-only: IAM needs the profile ARN
+  # plus the underlying model in any region the profile may route to.
+  model_ids = compact([var.analysis_model_id, var.code_model_id])
+
+  model_arns = concat(
+    [for id in local.model_ids :
+      "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${replace(id, "/^(us|eu|apac|global)\\./", "")}"
+    ],
+    [for id in local.model_ids :
+      "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${id}"
+      if replace(id, "/^(us|eu|apac|global)\\./", "") != id
+    ],
+  )
 
   guardrail_id      = var.create_guardrail ? aws_bedrock_guardrail.prompt_attack[0].guardrail_id : null
   guardrail_version = var.create_guardrail ? aws_bedrock_guardrail.prompt_attack[0].version : null
@@ -147,6 +156,12 @@ resource "aws_lambda_function" "agent_phase" {
       {
         MODHUB_WORKSPACE_BUCKET        = var.workspaces_bucket_name
         MODHUB_FETCH_DOC_FUNCTION_NAME = var.fetch_doc_lambda_name
+        # Same vars that scope the IAM policy above, so invoked and allowed
+        # models cannot drift.
+        BEDROCK_MODEL_ANALYSIS = var.analysis_model_id
+      },
+      var.code_model_id == null ? {} : {
+        BEDROCK_MODEL_CODE = var.code_model_id
       },
       var.create_guardrail ? {
         MODHUB_BEDROCK_GUARDRAIL_ID      = local.guardrail_id
