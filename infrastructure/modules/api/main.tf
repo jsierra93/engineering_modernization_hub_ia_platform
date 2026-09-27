@@ -154,11 +154,6 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = merge(
       {
-        # NOTE: as of this writing services/api's RunsTable() does not
-        # actually read this env var (it hardcodes "modhub-runs" as its
-        # default table name) - kept here so wiring is correct the day
-        # core_py grows env-var support, and so var.runs_table_name stays
-        # a real dependency edge in the module graph either way.
         RUNS_TABLE_NAME = var.runs_table_name
         # Name matches services/api/src/api/handler.py's
         # STATE_MACHINE_ARN_ENV constant exactly - do not rename without

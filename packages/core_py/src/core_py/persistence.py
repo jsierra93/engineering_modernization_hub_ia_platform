@@ -15,6 +15,7 @@ different workstream):
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -49,8 +50,10 @@ def _floats_to_decimal(item: dict[str, Any]) -> dict[str, Any]:
 
     return json.loads(json.dumps(item), parse_float=Decimal)
 
-DEFAULT_RUNS_TABLE = "modhub-runs"
-DEFAULT_EVENTS_TABLE = "modhub-events"
+# Env vars are set by the Terraform modules from the tables they create, so
+# any name_prefix works. The literals are the envs/local (Floci) names.
+DEFAULT_RUNS_TABLE = os.environ.get("RUNS_TABLE_NAME", "modhub-runs")
+DEFAULT_EVENTS_TABLE = os.environ.get("EVENTS_TABLE_NAME", "modhub-events")
 
 GSI_STATUS = "gsi_status"
 GSI_REQUESTED_BY = "gsi_requested_by"

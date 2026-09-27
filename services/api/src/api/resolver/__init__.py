@@ -33,6 +33,18 @@ class NoStrategyMatchError(Exception):
     candidate list (treated as no match, never as that match)."""
 
 
+def _strip_markdown_fence(text: str) -> str:
+    """Claude wraps JSON in ```json fences even when told not to
+    (confirmed against Haiku 4.5), which would otherwise read as a
+    malformed response and be indistinguishable from a real no-match."""
+
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    body = stripped.split("\n", 1)[1] if "\n" in stripped else ""
+    return body.rsplit("```", 1)[0].strip()
+
+
 def resolve_strategy(
     objetivo: str,
     candidates: list[StrategyManifest],
@@ -55,6 +67,7 @@ def resolve_strategy(
             {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 256,
+                "temperature": 0,
                 "system": _SYSTEM_PROMPT,
                 "messages": [{"role": "user", "content": user_message}],
             }
@@ -64,7 +77,7 @@ def resolve_strategy(
     text = payload["content"][0]["text"]
 
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(_strip_markdown_fence(text))
     except json.JSONDecodeError as exc:
         raise NoStrategyMatchError(f"model response was not valid JSON: {text!r}") from exc
 

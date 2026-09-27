@@ -79,3 +79,25 @@ def test_resolve_strategy_raises_when_no_candidates_registered():
 
     with pytest.raises(NoStrategyMatchError):
         resolve_strategy("cualquier cosa", [], bedrock_client=client)
+
+
+def test_resolve_strategy_accepts_markdown_fenced_json():
+    """Claude wraps JSON in ```json fences even when told not to --
+    confirmed against Haiku 4.5 with a real Bedrock call."""
+    fenced = '```json\n{"strategy_id": "python-pydantic-v2", "confidence": 0.99}\n```'
+    client = _FakeBedrockClient(fenced)
+
+    manifest, confidence = resolve_strategy("migrar de Pydantic v1 a v2", _CANDIDATES, bedrock_client=client)
+
+    assert manifest.id == "python-pydantic-v2"
+    assert confidence == pytest.approx(0.99)
+
+
+def test_resolve_strategy_sends_temperature_zero():
+    """CLAUDE.md: temperature 0 on every Bedrock call -- reproducibility
+    during the live defense."""
+    client = _FakeBedrockClient(json.dumps({"strategy_id": "python-pydantic-v2", "confidence": 0.9}))
+
+    resolve_strategy("migrar de pydantic v1 a v2", _CANDIDATES, bedrock_client=client)
+
+    assert json.loads(client.last_call["body"])["temperature"] == 0

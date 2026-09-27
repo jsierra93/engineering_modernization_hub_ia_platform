@@ -49,6 +49,9 @@ module "sandbox_network" {
   aws_region  = var.aws_region
   sandbox_architecture = "x86_64"
   ecr_force_delete     = true
+  # Pushed by hand to the repo this module creates; the repo is IMMUTABLE,
+  # so a rebuilt image needs a new tag here.
+  sandbox_image_tag    = "v1"
 }
 
 module "notifications" {
@@ -97,6 +100,7 @@ module "api" {
   lambda_package_zip_path = local.api_package_path
   lambda_architectures    = local.lambda_architectures
   aws_region              = var.aws_region
+  analysis_model_id       = local.analysis_model_id
 
   enable_jwt_authorizer = true
   jwt_issuer             = module.identity.issuer_url

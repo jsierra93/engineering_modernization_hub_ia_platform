@@ -111,7 +111,7 @@ resource "aws_iam_role_policy" "logging" {
 # definitions or all roles. ecs:StopTask/DescribeTasks (needed by the
 # .sync integration to poll/stop the task it started) and the
 # events:PutRule/PutTargets/DescribeRule trio (needed by .sync to manage
-# the AWS-owned "StepFunctionsGetEventForECSTaskRule" EventBridge rule that
+# the AWS-owned "StepFunctionsGetEventsForECSTaskRule" EventBridge rule that
 # reports task completion back to the state machine) cannot be scoped to a
 # single task/rule ARN ahead of time - AWS's ecs:RunTask.sync contract
 # requires them at the API level - so they are instead conditioned on the
@@ -168,8 +168,11 @@ data "aws_iam_policy_document" "sandbox_run_task" {
       "events:PutRule",
       "events:DescribeRule",
     ]
+    # "Events" plural -- the real managed-rule name, taken from a CloudTrail
+    # PutRule denial. AWS's own docs spell it singular, which silently
+    # produces a policy that never matches.
     resources = [
-      "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventForECSTaskRule"
+      "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule"
     ]
   }
 }
@@ -256,4 +259,16 @@ resource "aws_sfn_state_machine" "run" {
   tags = merge(var.tags, {
     Name = "${var.name_prefix}-run"
   })
+
+  # CreateStateMachine validates the role up front for the ecs:runTask.sync
+  # integration (it must be able to create the EventBridge managed rule), and
+  # these policies are otherwise siblings of this resource in the graph --
+  # without this they race and the create fails with AccessDeniedException.
+  depends_on = [
+    aws_iam_role_policy.logging,
+    aws_iam_role_policy.sandbox_run_task,
+    aws_iam_role_policy.invoke_fetch_repo,
+    aws_iam_role_policy.invoke_agent_phase_and_core_ops,
+    aws_iam_role_policy.send_notification,
+  ]
 }
