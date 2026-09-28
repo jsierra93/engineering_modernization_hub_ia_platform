@@ -137,6 +137,20 @@ export async function createRouter(
     res.status(upstream.status).type('application/json').send(body);
   });
 
+  router.post('/runs/:runId/pull-request', async (req, res) => {
+    const traceId = (req as any).traceId;
+    const upstream = await fetch(
+      `${modhubBaseUrl}/modhub/v1/runs/${req.params.runId}/pull-request`,
+      {
+        method: 'POST',
+        headers: forwardedHeaders(req, devToken, traceId),
+        body: JSON.stringify(req.body ?? {}),
+      },
+    );
+    const body = await upstream.text();
+    res.status(upstream.status).type('application/json').send(body);
+  });
+
   router.use(
     (
       error: Error,

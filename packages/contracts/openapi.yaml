@@ -6,7 +6,12 @@ info:
     the CLI, the Backstage backend plugin and lambda api itself. "El LLM
     propone, el nucleo dispone": this contract never lets a client set a
     run's final status directly -- only core_ops computes it.
-  version: "1.0.0"
+
+    Operations carrying `x-modhub-status: designed` are part of the designed
+    surface but are NOT deployed: they exist in neither lambda api nor API
+    Gateway. Everything else is live. Keep this marker accurate -- it is the
+    only thing separating the contract from a wish list.
+  version: "1.1.0"
 servers:
   - url: /modhub/v1
 tags:
@@ -18,6 +23,7 @@ paths:
   /me:
     get:
       operationId: getMe
+      x-modhub-status: designed
       tags: [identity]
       summary: The authenticated caller's identity.
       security:
@@ -35,6 +41,7 @@ paths:
   /strategies:
     get:
       operationId: listStrategies
+      x-modhub-status: designed
       tags: [strategies]
       summary: List registered strategy manifests.
       security:
@@ -66,11 +73,16 @@ paths:
         - in: header
           name: Idempotency-Key
           required: false
+          x-modhub-status: designed
           schema:
             type: string
           description: >
-            Replaying the same key returns the original run instead of
-            creating a duplicate.
+            Designed, not implemented: the header is accepted and ignored,
+            so two identical POSTs create two runs. Step Functions does
+            reject duplicate execution names, but the name is the freshly
+            generated run_id, so that protection sits in the wrong layer
+            and never fires. Implementing it means a conditional write on
+            (requested_by, key) before the run is created.
       requestBody:
         required: true
         content:
@@ -103,29 +115,34 @@ paths:
     get:
       operationId: listRuns
       tags: [runs]
-      summary: List runs visible to the caller.
+      summary: >
+        List the caller's own runs. Always scoped to the `sub` in the token
+        -- there is no parameter that widens it. A caller can only act on
+        runs they requested, so listing anyone else's would return rows
+        nothing can be done with.
       security:
         - bearerAuth: []
       parameters:
         - in: query
           name: status
           required: false
+          description: Narrows the caller's own runs to one status.
           schema:
             $ref: "#/components/schemas/RunStatus"
         - in: query
           name: mine
           required: false
+          deprecated: true
+          description: >
+            Accepted and ignored: the result is always the caller's own runs.
+            Kept so existing clients do not break.
           schema:
             type: boolean
-            default: false
-        - in: query
-          name: requested_by
-          required: false
-          schema:
-            type: string
+            default: true
         - in: query
           name: limit
           required: false
+          x-modhub-status: designed
           schema:
             type: integer
             minimum: 1
@@ -134,6 +151,7 @@ paths:
         - in: query
           name: cursor
           required: false
+          x-modhub-status: designed
           schema:
             type: string
       responses:
@@ -152,6 +170,7 @@ paths:
                   next_cursor:
                     type: string
                     nullable: true
+                    x-modhub-status: designed
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -161,7 +180,10 @@ paths:
     get:
       operationId: getRun
       tags: [runs]
-      summary: Read a run's current state.
+      summary: >
+        Read a run's current state. Scoped to the caller: a run requested by
+        someone else answers 404, not 403 -- a 403 would confirm that the
+        run_id exists.
       security:
         - bearerAuth: []
       responses:
@@ -181,6 +203,7 @@ paths:
       - $ref: "#/components/parameters/RunId"
     get:
       operationId: getRunEvents
+      x-modhub-status: designed
       tags: [runs]
       summary: Ordered event trail for a run.
       security:
@@ -215,6 +238,7 @@ paths:
       - $ref: "#/components/parameters/RunId"
     get:
       operationId: getRunPlan
+      x-modhub-status: designed
       tags: [runs]
       summary: The agent-proposed plan awaiting (or already given) approval.
       security:
@@ -281,6 +305,7 @@ paths:
       - $ref: "#/components/parameters/RunId"
     post:
       operationId: cancelRun
+      x-modhub-status: designed
       tags: [runs]
       summary: Cancel a run. A human decision, not a modernization outcome.
       security:
@@ -314,6 +339,7 @@ paths:
       - $ref: "#/components/parameters/RunId"
     get:
       operationId: getRunDiff
+      x-modhub-status: designed
       tags: [runs]
       summary: Unified diff produced by the run, contained in approved paths.
       security:
@@ -333,6 +359,64 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /runs/{run_id}/pull-request:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: openPullRequest
+      tags: [runs]
+      summary: >
+        Publish the run's result as a pull request on the source repository.
+        The only component that writes outside the platform, which is why it
+        is a separate Lambda rather than another branch inside lambda api.
+        Explicit: nothing publishes automatically when a run finishes.
+      description: >
+        Idempotent. The resulting URL is stored on the run, so a second call
+        returns the same pull request (200) instead of creating another. If
+        the run has no stored URL but GitHub already has a pull request for
+        the branch -- a crash between the two writes, or a run published
+        before the URL was persisted -- that pull request is adopted and
+        recorded rather than reported as an error.
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Pull request created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequest"
+        "200":
+          description: A pull request already existed for this run; the same one is returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Only the requester may publish this run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >
+            The run is in a state with nothing to publish, or it changed no
+            files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: GitHub rejected the request; the message carries its response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /runs/{run_id}/report:
     parameters:
       - $ref: "#/components/parameters/RunId"
@@ -342,7 +426,8 @@ paths:
       summary: >
         Final report: verdict computed by core_ops from real JUnit, plus
         the agent's narrative (sources, decisions, rationale). The state
-        never depends on the model's text.
+        never depends on the model's text. Scoped to the caller: a run
+        requested by someone else answers 404, not 403.
       security:
         - bearerAuth: []
       responses:
@@ -568,6 +653,22 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+        changed_paths:
+          type: array
+          items:
+            type: string
+          description: Measured by core_ops from S3, never taken from the agent's account.
+        pull_request_url:
+          type: string
+          format: uri
+          nullable: true
+          description: >
+            Set once the run has been published. Its presence is what makes
+            publishing idempotent -- a branch existing on GitHub is not a
+            record the platform can read back.
+        pull_request_branch:
+          type: string
+          nullable: true
         created_at:
           type: string
           format: date-time
@@ -656,38 +757,108 @@ components:
           items:
             type: string
 
+    PullRequest:
+      type: object
+      required: [run_id, pull_request_url, branch]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        pull_request_url:
+          type: string
+          format: uri
+        branch:
+          type: string
+        already_existed:
+          type: boolean
+          description: True when this call returned a pull request that already existed.
+
     Report:
       type: object
-      required: [run_id, status, checks, narrative, cost_usd, created_at]
+      description: >
+        Two authors, one document (invariant #10). `verdict` is computed by
+        core_ops from the real JUnit without Bedrock; `narrative` is the
+        agent's prose. The status never depends on the model's text.
+      required: [run_id, status, repo, commit, strategy, verdict, narrative, created_at]
       properties:
         run_id:
           type: string
           format: uuid
         status:
           $ref: "#/components/schemas/RunStatus"
-        checks:
-          type: array
-          items:
-            type: object
-            required: [name, passed]
-            properties:
-              name:
-                type: string
-              passed:
-                type: boolean
-              detail:
-                type: string
-        narrative:
+        repo:
           type: string
-          description: Written by the agent -- sources, decisions, rationale. Never determines status.
-        sources:
+        commit:
+          type: string
+          pattern: "^[0-9a-fA-F]{40}$"
+        objetivo:
+          type: string
+        strategy:
+          type: object
+          required: [id, version]
+          properties:
+            id:
+              type: string
+            version:
+              type: string
+        verdict:
+          type: object
+          required: [status, spent_usd, max_usd, iterations_used, max_iterations]
+          properties:
+            status:
+              $ref: "#/components/schemas/RunStatus"
+            spent_usd:
+              type: number
+              format: float
+            max_usd:
+              type: number
+              format: float
+            iterations_used:
+              type: integer
+            max_iterations:
+              type: integer
+        narrative:
+          type: object
+          description: Written by the agent. Never determines status.
+          properties:
+            summary:
+              type: string
+              nullable: true
+            viability_reason:
+              type: string
+              nullable: true
+            sources:
+              type: array
+              items:
+                type: string
+                format: uri
+            risks:
+              type: array
+              items:
+                type: string
+        changed_paths:
           type: array
           items:
             type: string
-            format: uri
-        cost_usd:
-          type: number
-          format: float
+        pull_request_url:
+          type: string
+          format: uri
+          nullable: true
+        diff:
+          type: string
+          nullable: true
+          description: >
+            Unified diff v0 -> v1, computed from S3. Truncated past 200000
+            characters, with a trailing `[truncated]` marker -- a truncated
+            diff will not apply cleanly.
+        models_used:
+          type: object
+          additionalProperties:
+            type: string
+          description: Phase -> Bedrock model id. Platform configuration, never the agent's choice.
+        plan_hash:
+          type: string
+          nullable: true
         created_at:
           type: string
           format: date-time

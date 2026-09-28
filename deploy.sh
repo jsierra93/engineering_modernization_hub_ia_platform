@@ -18,7 +18,7 @@ shift || true
 
 TF="${TERRAFORM_BIN:-terraform}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ALL_SERVICES=(api core_ops agent_phase fetch_repo fetch_doc)
+ALL_SERVICES=(api core_ops agent_phase fetch_repo fetch_doc open_pr)
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
@@ -99,4 +99,13 @@ if [[ "${PLAN_ONLY}" == "1" ]]; then
 fi
 
 step "terraform apply"
-"${TF}" apply -no-color tfplan.out | grep -E "Apply complete|Error"
+# Piping straight into grep would report grep's exit status, not
+# terraform's -- a failed apply then looks like a successful deploy.
+APPLY_LOG="$(mktemp)"
+if ! "${TF}" apply -no-color tfplan.out >"${APPLY_LOG}" 2>&1; then
+  tail -40 "${APPLY_LOG}"
+  rm -f "${APPLY_LOG}"
+  die "terraform apply failed"
+fi
+grep -E "Apply complete" "${APPLY_LOG}"
+rm -f "${APPLY_LOG}"

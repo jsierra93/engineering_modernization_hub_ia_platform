@@ -73,7 +73,12 @@ class Run(BaseModel):
 
     run_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     status: RunStatus = RunStatus.PENDING
-    repo: str
+    repo: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+    """`owner/name`, and only that. The value is interpolated straight into
+    a codeload.github.com URL, so a `..` or a slash here walks that path
+    into a different repository. The host is hardcoded, so this is not full
+    SSRF -- but "any repo on GitHub" is still not the same as "the repo the
+    requester named"."""
     commit: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
     objetivo: str = Field(min_length=1)
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -96,10 +101,24 @@ class Run(BaseModel):
     """How long the run sat waiting for a human. Subtracted from elapsed
     time when the verdict is computed: max_minutes bounds the work, not the
     deliberation."""
-    diff: str | None = None
-    """Unified diff v0 -> v1, computed by core_ops from S3. The agent's own
-    account of what it changed is in `plan`; this is what it actually did."""
+    reason_code: str | None = None
+    """Which branch of evaluate_verdict produced `status`. The five states
+    come from the brief verbatim and cannot be split, but one of them --
+    FALLIDO_CONTROLADO -- covers six conditions, from an exhausted fix loop
+    to a deliberately weakened test suite. A reader cannot tell a platform
+    failure from a security event by the state alone; this is what answers
+    "why" without inventing a sixth state."""
+    diff_key: str | None = None
+    """S3 key of the unified diff v0 -> v1, computed by core_ops. The diff
+    itself is never stored on this item: it can run to hundreds of KB and a
+    DynamoDB item tops out at 400 KB. The agent's own account of what it
+    changed is in `plan`; the object this points at is what it actually did."""
     changed_paths: list[str] = Field(default_factory=list)
+    pull_request_url: str | None = None
+    """Set once `open_pr` publishes this run. Its presence is what makes
+    publishing idempotent -- the branch existing on GitHub is not a record
+    the platform can read back after a page reload."""
+    pull_request_branch: str | None = None
     plan: dict[str, Any] | None = None
     """The DiscoveryPlan the agent proposed, as approved-or-not. Persisted
     so a human can read what they are approving -- an approval against a

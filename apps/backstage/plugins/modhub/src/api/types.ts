@@ -85,7 +85,10 @@ export interface Report {
     sources?: string[];
     risks?: string[];
   };
+  reason_code?: string | null;
+  security_events?: { type: string; message?: string | null; data?: Record<string, unknown> }[];
   changed_paths: string[];
+  pull_request_url?: string | null;
   diff?: string | null;
   models_used: Record<string, string>;
   plan_hash?: string | null;

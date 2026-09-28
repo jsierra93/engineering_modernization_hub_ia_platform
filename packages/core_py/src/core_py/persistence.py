@@ -23,6 +23,7 @@ from typing import Any
 import boto3
 import boto3.dynamodb.conditions as conditions
 from botocore.exceptions import ClientError
+from pydantic import BaseModel
 
 from core_py.models import Event, Run
 
@@ -58,8 +59,25 @@ def _run_to_item(run: Run) -> dict[str, Any]:
     return _floats_to_decimal(item)
 
 
+def _known_fields_only(model: type[BaseModel], item: dict[str, Any]) -> dict[str, Any]:
+    """Drop attributes the current model no longer declares.
+
+    `extra="forbid"` is right for validating a request body -- a typo in a
+    field name should be rejected, not silently ignored. It is wrong for
+    reading rows out of a store that has been written to across schema
+    versions, because that store always holds older shapes. Renaming
+    `Run.diff` to `diff_key` made every previously-written row unreadable
+    and took `GET /runs` down with a 500; the reverse (a new field written
+    by a freshly deployed Lambda, read by one still running the old model)
+    broke a run mid-flight. Both stop here, and a genuine typo on the API
+    surface is still rejected where it matters.
+    """
+
+    return {key: value for key, value in item.items() if key in model.model_fields}
+
+
 def _item_to_run(item: dict[str, Any]) -> Run:
-    return Run.model_validate(item)
+    return Run.model_validate(_known_fields_only(Run, item))
 
 
 def _event_to_item(event: Event) -> dict[str, Any]:
@@ -69,7 +87,7 @@ def _event_to_item(event: Event) -> dict[str, Any]:
 
 
 def _item_to_event(item: dict[str, Any]) -> Event:
-    return Event.model_validate(item)
+    return Event.model_validate(_known_fields_only(Event, item))
 
 
 class RunsTable:
@@ -126,6 +144,30 @@ class RunsTable:
             ReturnValues="UPDATED_NEW",
         )
         return float(resp["Attributes"]["spent_usd"])
+
+    def record_pull_request(self, run_id: uuid.UUID | str, *, url: str, branch: str) -> str:
+        """Remember the PR this run produced, and return the URL that ended
+        up stored -- which is the one already there if another call won.
+
+        Conditional on `attribute_not_exists` so two clicks cannot record
+        two different PRs for one run. The loser reads back the winner's
+        URL instead of failing: from the user's side both clicks published
+        the same run, so both should end up looking at the same PR.
+        """
+
+        try:
+            self._table.update_item(
+                Key={"run_id": str(run_id)},
+                UpdateExpression="SET pull_request_url = :u, pull_request_branch = :b",
+                ConditionExpression="attribute_not_exists(pull_request_url)",
+                ExpressionAttributeValues={":u": url, ":b": branch},
+            )
+            return url
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+            existing = self.get(run_id)
+            return (existing.pull_request_url if existing else None) or url
 
     def approve_or_reject(
         self, run_id: uuid.UUID | str, *, sub: str, plan_hash: str, new_status: str

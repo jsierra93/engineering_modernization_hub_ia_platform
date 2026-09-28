@@ -73,30 +73,47 @@ class GitHub:
     def default_branch(self, repo: str) -> str:
         return self._request("GET", f"/repos/{repo}")["default_branch"]
 
-    def create_branch(self, repo: str, branch: str, from_sha: str) -> None:
+    def commit_files(self, repo: str, branch: str, base_sha: str, files: dict[str, bytes], message: str) -> None:
+        """One commit for the whole run, via the Git Data API.
+
+        The Contents API (`PUT /contents/{path}`) is the obvious way to
+        write a file, but it commits on every call -- a run touching three
+        files produced three identical commits. Blobs, one tree and one
+        commit keep the unit of review equal to the unit of work."""
+
+        import base64
+
+        base_tree = self._request("GET", f"/repos/{repo}/git/commits/{base_sha}")["tree"]["sha"]
+
+        tree_entries = []
+        for path, content in files.items():
+            blob = self._request(
+                "POST",
+                f"/repos/{repo}/git/blobs",
+                json={"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"},
+            )
+            tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+
+        tree = self._request(
+            "POST", f"/repos/{repo}/git/trees", json={"base_tree": base_tree, "tree": tree_entries}
+        )
+        commit = self._request(
+            "POST",
+            f"/repos/{repo}/git/commits",
+            json={"message": message, "tree": tree["sha"], "parents": [base_sha]},
+        )
         self._request(
             "POST",
             f"/repos/{repo}/git/refs",
-            json={"ref": f"refs/heads/{branch}", "sha": from_sha},
+            json={"ref": f"refs/heads/{branch}", "sha": commit["sha"]},
         )
 
-    def put_file(self, repo: str, branch: str, path: str, content: bytes, message: str) -> None:
-        import base64
-
-        existing = self._session.get(
-            f"{GITHUB_API}/repos/{repo}/contents/{path}",
-            headers=self._headers,
-            params={"ref": branch},
-            timeout=30,
+    def find_pull_request(self, repo: str, branch: str) -> str | None:
+        owner = repo.split("/")[0]
+        found = self._request(
+            "GET", f"/repos/{repo}/pulls?head={owner}:{branch}&state=all&per_page=1"
         )
-        body: dict[str, Any] = {
-            "message": message,
-            "content": base64.b64encode(content).decode("ascii"),
-            "branch": branch,
-        }
-        if existing.status_code == 200:
-            body["sha"] = existing.json()["sha"]
-        self._request("PUT", f"/repos/{repo}/contents/{path}", json=body)
+        return found[0]["html_url"] if found else None
 
     def open_pull_request(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
         created = self._request(
@@ -138,6 +155,17 @@ def open_pull_request(
 
     run_data = run.model_dump(mode="json")
 
+    if run_data.get("pull_request_url"):
+        return _response(
+            200,
+            {
+                "run_id": run_id,
+                "pull_request_url": run_data["pull_request_url"],
+                "branch": run_data.get("pull_request_branch"),
+                "already_existed": True,
+            },
+        )
+
     if run_data["status"] not in PUBLISHABLE_STATES:
         return _response(
             409,
@@ -170,10 +198,25 @@ def open_pull_request(
     branch = f"modhub/{run_id[:8]}"
 
     try:
+        # Repairs a run published before the URL was persisted, and covers
+        # a crash between GitHub accepting the PR and DynamoDB recording
+        # it: GitHub, not the platform, is the authority on what exists.
+        existing = github.find_pull_request(repo, branch)
+        if existing:
+            stored = runs_table.record_pull_request(run_id, url=existing, branch=branch)
+            return _response(
+                200,
+                {"run_id": run_id, "pull_request_url": stored, "branch": branch, "already_existed": True},
+            )
+
         base = github.default_branch(repo)
-        github.create_branch(repo, branch, run_data["commit"])
-        for path, content in files.items():
-            github.put_file(repo, branch, path, content, f"modhub: {run_data['objetivo'][:60]}")
+        github.commit_files(
+            repo,
+            branch,
+            run_data["commit"],
+            files,
+            f"modhub: {run_data['objetivo'][:60]}\n\nrun {run_id}\nstrategy {run_data['strategy_id']}",
+        )
         url = github.open_pull_request(
             repo,
             branch,
@@ -184,7 +227,8 @@ def open_pull_request(
     except PullRequestError as exc:
         return _response(502, {"code": "GITHUB_ERROR", "message": str(exc), "run_id": run_id})
 
-    return _response(201, {"run_id": run_id, "pull_request_url": url, "branch": branch})
+    stored = runs_table.record_pull_request(run_id, url=url, branch=branch)
+    return _response(201, {"run_id": run_id, "pull_request_url": stored, "branch": branch})
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:

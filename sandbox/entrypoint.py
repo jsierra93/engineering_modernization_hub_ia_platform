@@ -220,6 +220,35 @@ def check_install() -> int:
     return overall_rc
 
 
+def _junit_summary(junit_path: Path) -> dict:
+    """What the report claims, next to what the process actually returned.
+
+    A test harness the agent can influence writes the XML; the exit code
+    comes from the process itself. Emitting both makes a disagreement
+    visible instead of a silent pass. Detection, not prevention: producing
+    the JUnit from a parent process under a different uid is the complete
+    fix, and is not done here.
+    """
+
+    if not junit_path.exists():
+        return {"junit": "missing"}
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.parse(junit_path).getroot()
+        suite = root if root.tag == "testsuite" else root.find("testsuite")
+        if suite is None:
+            return {"junit": "no testsuite element"}
+        return {
+            "tests": suite.get("tests"),
+            "failures": suite.get("failures"),
+            "errors": suite.get("errors"),
+            "skipped": suite.get("skipped"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"junit": f"unparseable: {exc}"}
+
+
 def check_unit_tests() -> int:
     """Run pytest, producing real JUnit XML at /output/junit.xml.
 
@@ -248,6 +277,7 @@ def check_unit_tests() -> int:
         ]
     )
     _write_log("unit_tests", result)
+    _emit("sandbox.junit_crosscheck", exit_code=result.returncode, **_junit_summary(junit_path))
 
     if not junit_path.exists():
         # pytest can exit non-zero for reasons that never produce a

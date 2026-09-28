@@ -14,12 +14,27 @@
           "commit.$": "$.commit"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "bucket.$": "$.Payload.bucket",
         "workspace_get_url.$": "$.Payload.workspace_get_url",
         "junit_put_url.$": "$.Payload.junit_put_url",
         "junit_key.$": "$.Payload.junit_key"
       },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
       "ResultPath": "$.fetch_repo_result",
       "Next": "Baseline"
     },
@@ -55,12 +70,19 @@
       "ResultPath": "$.baseline_result",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "Comment": "A non-zero container exit means the suite really fails on the untouched repo -- BLOQUEADO, and the run stops before the agent is ever asked to modernize something that is already broken.",
+          "ErrorEquals": ["States.TaskFailed"],
           "ResultPath": "$.baseline_error",
           "Next": "RecordBaselineBlocked"
+        },
+        {
+          "Comment": "Everything else -- Fargate capacity, a Spot interruption, a timeout, a bad task definition -- says nothing about the repository. Reporting it as BLOQUEADO would blame the developer's code for the platform's own outage, which is exactly the confusion invariant #11 exists to prevent.",
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordUnrecoverableVerdict"
         }
       ],
-      "Next": "DiscoveryPlan"
+      "Next": "BaselineLint"
     },
 
     "RecordBaselineBlocked": {
@@ -79,8 +101,78 @@
           "checks": {}
         }
       },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultPath": "$.verdict_result",
       "End": true
+    },
+
+"BaselineLint": {
+      "Type": "Task",
+      "Comment": "Lint on the untouched repo. Without it the final lint measures the absolute state, not the effect: a repo that arrives with dead imports would be reported as a partial completion however clean the migration was. Invariant #2 already measures the test suite this way -- lint follows the same rule.",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${sandbox_cluster_arn}",
+        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ${sandbox_subnet_ids},
+            "SecurityGroups": ${sandbox_security_group_ids},
+            "AssignPublicIp": "${sandbox_assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${sandbox_container_name}",
+              "Command": ["lint"],
+              "Environment": [
+                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.fetch_repo_result.workspace_get_url" },
+                { "Name": "JUNIT_PUT_URL", "Value.$": "$.fetch_repo_result.junit_put_url" }
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": "$.baseline_lint_result",
+      "Catch": [
+        {
+          "Comment": "Includes infrastructure failures on purpose: lint that could not be measured on the baseline is treated as dirty, which only ever removes lint from the verdict.",
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.baseline_lint_error",
+          "Next": "MarkBaselineLintDirty"
+        }
+      ],
+      "Next": "MarkBaselineLintClean"
+    },
+
+    "MarkBaselineLintClean": {
+      "Type": "Pass",
+      "Result": true,
+      "ResultPath": "$.baseline_lint_clean",
+      "Next": "DiscoveryPlan"
+    },
+
+    "MarkBaselineLintDirty": {
+      "Type": "Pass",
+      "Comment": "The repo already failed lint before the agent touched it, so a final lint failure cannot be attributed to this run.",
+      "Result": false,
+      "ResultPath": "$.baseline_lint_clean",
+      "Next": "DiscoveryPlan"
     },
 
     "DiscoveryPlan": {
@@ -97,6 +189,14 @@
           "objetivo.$": "$.objetivo"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "plan.$": "$.Payload.result",
         "cost_usd.$": "$.Payload.cost_usd",
@@ -129,10 +229,26 @@
           "phase": "discovery_plan"
         }
       },
+      "Retry": [
+        {
+          "Comment": "Only errors that mean the invocation never reached the function: add_spend increments the ledger unconditionally, so retrying a call that may already have run would double-charge the run (invariant #6).",
+          "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "spent_usd.$": "$.Payload.spent_usd",
         "budget_exhausted.$": "$.Payload.budget_exhausted"
       },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
       "ResultPath": "$.spend_result",
       "Next": "CheckBudgetDiscoveryPlan"
     },
@@ -175,9 +291,25 @@
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
           "final_junit_key.$": "$.fetch_repo_result.junit_key",
           "agent_concluded_infeasible": true,
+          "plan.$": "$.discovery_plan_result.plan",
           "checks": {}
         }
       },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultPath": "$.verdict_result",
       "End": true
     },
@@ -194,10 +326,25 @@
           "plan.$": "$.discovery_plan_result.plan"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "plan_hash.$": "$.Payload.plan_hash",
         "status.$": "$.Payload.status"
       },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
       "ResultPath": "$.record_plan_result",
       "Next": "NotifyApprovalPending"
     },
@@ -237,6 +384,23 @@
           "task_token.$": "$$.Task.Token"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "TimeoutSeconds": ${approval_timeout_seconds},
+      "Catch": [
+        {
+          "Comment": "ONLY States.Timeout. A rejection arrives as SendTaskFailure with error=ApprovalRejected and stays uncaught on purpose (see this state's own Comment) -- an execution ending FAILED is the correct, visible signal for an operator-rejected plan. A timeout is different: nobody decided anything, and without this the run would sit in AWAITING_APPROVAL in DynamoDB forever while the execution had already given up.",
+          "ErrorEquals": ["States.Timeout"],
+          "ResultPath": "$.approval_timeout",
+          "Next": "RecordApprovalTimeout"
+        }
+      ],
       "ResultPath": "$.approval_result",
       "Next": "Implement"
     },
@@ -255,6 +419,14 @@
           "plan.$": "$.discovery_plan_result.plan"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "workspace_get_url.$": "$.Payload.workspace_get_url",
         "junit_put_url.$": "$.Payload.junit_put_url",
@@ -290,10 +462,26 @@
           "phase": "implement"
         }
       },
+      "Retry": [
+        {
+          "Comment": "Only errors that mean the invocation never reached the function: add_spend increments the ledger unconditionally, so retrying a call that may already have run would double-charge the run (invariant #6).",
+          "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "spent_usd.$": "$.Payload.spent_usd",
         "budget_exhausted.$": "$.Payload.budget_exhausted"
       },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
       "ResultPath": "$.spend_result",
       "Next": "CheckBudgetImplement"
     },
@@ -341,12 +529,19 @@
       "ResultPath": "$.verify_result",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "Comment": "A non-zero container exit -- a real failing test -- is what the fix loop exists for.",
+          "ErrorEquals": ["States.TaskFailed"],
           "ResultPath": "$.verify_error",
           "Next": "CheckIterations"
+        },
+        {
+          "Comment": "Anything else (ECS capacity, a Spot interruption, a timeout) is not a failing test. Sending it to the fix loop would spend real iterations asking the model to repair code that was never broken.",
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordUnrecoverableVerdict"
         }
       ],
-      "Next": "ComputeFinalVerdict"
+      "Next": "Lint"
     },
 
     "CheckIterations": {
@@ -378,6 +573,14 @@
           "max_iterations.$": "$.max_iterations"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "workspace_get_url.$": "$.Payload.workspace_get_url",
         "junit_put_url.$": "$.Payload.junit_put_url",
@@ -413,10 +616,26 @@
           "phase": "implement"
         }
       },
+      "Retry": [
+        {
+          "Comment": "Only errors that mean the invocation never reached the function: add_spend increments the ledger unconditionally, so retrying a call that may already have run would double-charge the run (invariant #6).",
+          "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultSelector": {
         "spent_usd.$": "$.Payload.spent_usd",
         "budget_exhausted.$": "$.Payload.budget_exhausted"
       },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
       "ResultPath": "$.spend_result",
       "Next": "CheckBudgetFix"
     },
@@ -435,9 +654,18 @@
 
     "IncrementIteration": {
       "Type": "Pass",
+      "Comment": "Two states, not one, because ASL has no way to produce a bare number. A Pass whose Parameters build {iteration: n+1} has that OBJECT as its result, so writing it straight back to $.iteration nests it: the next comparison in CheckIterations reads {iteration: 1} where it expects 1, and a Choice state cannot catch the runtime error that follows.",
       "Parameters": {
         "iteration.$": "States.MathAdd($.iteration, 1)"
       },
+      "ResultPath": "$.bump",
+      "Next": "ApplyIteration"
+    },
+
+    "ApplyIteration": {
+      "Type": "Pass",
+      "Comment": "InputPath selects the scalar; ResultPath writes it back into the untouched input, so $.iteration stays a number.",
+      "InputPath": "$.bump.iteration",
       "ResultPath": "$.iteration",
       "Next": "Verify"
     },
@@ -458,10 +686,60 @@
           "checks": {}
         }
       },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultPath": "$.verdict_result",
       "End": true
     },
 
+
+    "RecordApprovalTimeout": {
+      "Type": "Task",
+      "Comment": "Nobody approved within the platform window. FALLIDO_CONTROLADO with reason APPROVAL_TIMED_OUT -- not CANCELADO, which is an explicit human decision, and not PRESUPUESTO_AGOTADO, since approval wait is excluded from max_minutes by design.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.fetch_repo_result.junit_key",
+          "approval_timed_out": true,
+          "checks": {}
+        }
+      },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.verdict_result",
+      "End": true
+    },
     "ComputeBudgetExhaustedVerdict": {
       "Type": "Task",
       "Comment": "The recorded spend reached max_usd. evaluate_verdict's rule 1 derives PRESUPUESTO_AGOTADO from the persisted ledger -- no flag is passed in.",
@@ -477,7 +755,46 @@
           "checks": {}
         }
       },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultPath": "$.verdict_result",
+      "End": true
+    },
+
+    "RecordStuckRun": {
+      "Type": "Task",
+      "Comment": "Computing the verdict itself failed. This writes a terminal status and nothing else -- no S3, no JUnit -- so it cannot fail the same way. A run left in RUNNING reads as still working, which is worse than a blunt FALLIDO_CONTROLADO.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "record_terminal_failure",
+          "run_id.$": "$.run_id",
+          "cause.$": "$.verdict_error.Cause"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.stuck_result",
       "End": true
     },
 
@@ -489,6 +806,7 @@
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
           "action": "compute_verdict",
+          "iteration.$": "$.iteration",
           "run_id.$": "$.run_id",
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
@@ -497,18 +815,74 @@
           "checks": { "install": true, "unit_tests": false }
         }
       },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultPath": "$.verdict_result",
       "End": true
     },
 
+    "Lint": {
+      "Type": "Task",
+      "Comment": "The strategy's non-blocking check (ruff). It runs as its own sandbox task because the image runs exactly one named check per invocation -- which is why lint was never actually executed before: both Baseline and Verify pass Command [unit_tests], and the ASL simply asserted lint passed.",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "Cluster": "${sandbox_cluster_arn}",
+        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ${sandbox_subnet_ids},
+            "SecurityGroups": ${sandbox_security_group_ids},
+            "AssignPublicIp": "${sandbox_assign_public_ip}"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "${sandbox_container_name}",
+              "Command": ["lint"],
+              "Environment": [
+                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.implement_result.workspace_get_url" },
+                { "Name": "JUNIT_PUT_URL", "Value.$": "$.implement_result.junit_put_url" }
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": "$.lint_result",
+      "Catch": [
+        {
+          "Comment": "lint is non-blocking: a failure is COMPLETADO_PARCIALMENTE, never a failed run. Infrastructure failures land here too, on purpose -- lint that could not be measured is reported as not passing rather than assumed green, which understates the result but never overstates it.",
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.lint_error",
+          "Next": "CheckBaselineLint"
+        }
+      ],
+      "Next": "ComputeFinalVerdict"
+    },
+
     "ComputeFinalVerdict": {
       "Type": "Task",
-      "Comment": "Verify succeeded (no Catch fired) -- install/unit_tests both pass by construction. check_suite_integrity (via core_ops comparing baseline vs. this final JUnit) is what can still turn this into FALLIDO_CONTROLADO despite a green run, per CLAUDE.md invariant #2.",
+      "Comment": "Verify and Lint both succeeded. install is true by sound inference, not assertion: the sandbox installs dependencies inside check_unit_tests, so unit_tests cannot pass unless install did. check_suite_integrity (via core_ops comparing baseline vs. this final JUnit) is what can still turn this into FALLIDO_CONTROLADO despite a green run, per CLAUDE.md invariant #2.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
           "action": "compute_verdict",
+          "iteration.$": "$.iteration",
           "run_id.$": "$.run_id",
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
@@ -516,6 +890,104 @@
           "checks": { "install": true, "unit_tests": true, "lint": true }
         }
       },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.verdict_result",
+      "End": true
+    },
+
+    "CheckBaselineLint": {
+      "Type": "Choice",
+      "Comment": "A lint failure only counts against the run if the baseline was clean. Otherwise the finding predates the agent and lint drops out of the verdict entirely -- reporting it as failed would blame this run for the repository's existing debt.",
+      "Choices": [
+        {
+          "Variable": "$.baseline_lint_clean",
+          "BooleanEquals": true,
+          "Next": "ComputeVerdictLintFailed"
+        }
+      ],
+      "Default": "ComputeVerdictLintUnattributable"
+    },
+
+    "ComputeVerdictLintFailed": {
+      "Type": "Task",
+      "Comment": "Blocking checks passed but lint did not -- COMPLETADO_PARCIALMENTE. Identical to ComputeFinalVerdict except for the one flag, because the verdict itself is core_ops's to compute from these inputs, not the state machine's to decide.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "iteration.$": "$.iteration",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.implement_result.junit_key",
+          "checks": { "install": true, "unit_tests": true, "lint": false }
+        }
+      },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.verdict_result",
+      "End": true
+    },
+
+"ComputeVerdictLintUnattributable": {
+      "Type": "Task",
+      "Comment": "lint is omitted from checks, not reported false: core_ops evaluates only what was measured, and a finding that predates the run was never this run's to answer for. The omission itself is the audit trail.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "compute_verdict",
+          "iteration.$": "$.iteration",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
+          "final_junit_key.$": "$.implement_result.junit_key",
+          "checks": { "install": true, "unit_tests": true }
+        }
+      },
+            "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.verdict_error",
+          "Next": "RecordStuckRun"
+        }
+      ],
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
       "ResultPath": "$.verdict_result",
       "End": true
     }

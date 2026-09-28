@@ -110,6 +110,10 @@ module "api" {
   runs_table_name         = module.persistence.runs_table_name
   runs_table_arn          = module.persistence.runs_table_arn
   state_machine_arn       = module.orchestration.state_machine_arn
+  workspaces_bucket_name  = module.persistence.workspaces_bucket_name
+  workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
+  events_table_name       = module.persistence.events_table_name
+  events_table_arn        = module.persistence.events_table_arn
   lambda_package_zip_path = local.lambda_package_path
 
   # Override the arm64 default: confirmed empirically (2026-09-25, via a

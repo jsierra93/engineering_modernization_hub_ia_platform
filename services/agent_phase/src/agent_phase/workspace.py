@@ -17,31 +17,13 @@ which doesn't need a real S3 backend to verify.
 
 from __future__ import annotations
 
+from core_py.scope import normalize
+
 from typing import Any, Protocol
 
 
 def _is_within_root(candidate: str) -> bool:
-    """Same check as fetch_repo.sanitize._is_within_root -- duplicated
-    rather than imported (these are separate deployable Lambdas with
-    separate dependency footprints), kept in sync by both being simple
-    and small enough to review at a glance."""
-
-    if candidate.startswith("/") or candidate.startswith("\\"):
-        return False
-    if len(candidate) >= 2 and candidate[1] == ":":
-        return False
-    depth = 0
-    for part in candidate.replace("\\", "/").split("/"):
-        if part in ("", "."):
-            continue
-        if part == "..":
-            depth -= 1
-            if depth < 0:
-                return False
-        else:
-            depth += 1
-    return True
-
+    return normalize(candidate) is not None
 
 class WorkspacePathError(Exception):
     """A tool asked for a path that escapes its own run's workspace."""

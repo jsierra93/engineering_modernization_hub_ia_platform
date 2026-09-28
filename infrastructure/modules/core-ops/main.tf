@@ -20,8 +20,9 @@
 # IAM for this Lambda's execution role is scoped to exactly:
 #   - dynamodb:GetItem/PutItem/UpdateItem/Query on the runs table + indexes
 #   - dynamodb:GetItem/PutItem/Query on the events table
-#   - s3:GetObject on the workspaces bucket, scoped to the JUnit results
-#     prefix only (ws/*/junit/*) -- read-only, nothing broader
+#   - s3:GetObject + ListBucket on the workspaces bucket, scoped to ws/*
+#   - s3:PutObject on ws/*/diff.patch, the single object it writes
+#     -- read-only, for the JUnit results and the diff between versions
 # Nothing else.
 
 locals {
@@ -93,11 +94,38 @@ data "aws_iam_policy_document" "core_ops_lambda_scope" {
     resources = [var.events_table_arn]
   }
 
+  # Widened from ws/*/junit/* when core_ops began computing the run's diff:
+  # measuring what changed means reading both workspace versions, not just
+  # the test results.
   statement {
-    sid       = "JunitResultsReadOnly"
+    sid       = "WorkspaceReadOnly"
     effect    = "Allow"
     actions   = ["s3:GetObject"]
-    resources = ["${var.workspaces_bucket_arn}/ws/*/junit/*"]
+    resources = ["${var.workspaces_bucket_arn}/ws/*"]
+  }
+
+  # The one object core_ops writes, and the only one it can. The diff moved
+  # out of the run item because a DynamoDB item tops out at 400 KB; this
+  # permission was missed in that change, so PutObject failed and the
+  # try/except swallowed it -- every run silently lost its diff.
+  statement {
+    sid       = "WriteRunDiffOnly"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${var.workspaces_bucket_arn}/ws/*/diff.patch"]
+  }
+
+  statement {
+    sid       = "ListWorkspacePrefixOnly"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [var.workspaces_bucket_arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["ws/*"]
+    }
   }
 }
 

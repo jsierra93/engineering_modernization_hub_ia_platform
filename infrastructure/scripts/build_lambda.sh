@@ -80,7 +80,15 @@ case "${SERVICE}" in
   core_ops)
     SERVICE_SRC="${REPO_ROOT}/services/core_ops/src/core_ops"
     SERVICE_PKG_NAME="core_ops"
-    WORKSPACE_PACKAGES=("${REPO_ROOT}/packages/core_py/src/core_py:core_py")
+    # strategies_sdk/python_pydantic_v2: core_ops re-derives the approved
+    # scope from the manifest to check the diff against it (invariant #4),
+    # rather than trusting what agent_phase reports. Pure Python, no
+    # Bedrock -- invariant #1 is untouched.
+    WORKSPACE_PACKAGES=(
+      "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
+      "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
+      "${REPO_ROOT}/strategies/python_pydantic_v2/src/python_pydantic_v2:python_pydantic_v2"
+    )
     THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34")
     ;;
   fetch_doc)

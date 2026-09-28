@@ -19,13 +19,15 @@ from typing import Any
 
 from core_py.models import RunStatus
 from core_py.observability import log_event
+from core_py.scope import resolve_scope
 from core_py.models import Event
 from core_py.persistence import EventsTable, RunsTable
 
 from core_ops.diff import compute_diff
+from core_ops.strategy_lookup import get_strategy_manifest
 from core_ops.plan_hash import compute_plan_hash
 from core_ops.suite_integrity import JUnitSummary, check_suite_integrity, parse_junit
-from core_ops.verdict import BudgetStatus, VerdictInputs, evaluate_verdict
+from core_ops.verdict import BudgetStatus, VerdictInputs, evaluate_verdict_with_reason
 
 # CLAUDE.md's platform ceiling -- resolve_limits' own invariant check
 # happens earlier (Fase 4's resolver); this handler only ever reads
@@ -149,6 +151,22 @@ def _record_spend(
     return {"run_id": str(run_id), "spent_usd": spent_usd, "budget_exhausted": exhausted}
 
 
+def _record_terminal_failure(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
+    """Called by the ASL only when computing a verdict itself failed. Keeps
+    a run from sitting in RUNNING forever, which is worse than a wrong
+    verdict: it reads as still working."""
+
+    run_id = event["run_id"]
+    run = runs_table.get(run_id)
+    if run is None:
+        raise ValueError(f"no such run: {run_id}")
+
+    run.status = RunStatus.FALLIDO_CONTROLADO
+    runs_table.put(run)
+    log_event("core_ops.terminal_failure", run_id=run_id, cause=str(event.get("cause"))[:300])
+    return {"run_id": str(run_id), "status": run.status.value}
+
+
 def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: Any = None) -> dict[str, Any]:
     run_id = event["run_id"]
     run = runs_table.get(run_id)
@@ -160,6 +178,69 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
     baseline: JUnitSummary = parse_junit(baseline_xml)
     final: JUnitSummary = parse_junit(final_xml)
     violation = check_suite_integrity(baseline, final)
+
+    # The infeasible path never reaches RecordPlan -- it must not, since
+    # that state also moves the run to AWAITING_APPROVAL, and there is
+    # nothing to approve. But the plan is where the reasoning and the
+    # sources live, so without this the run reports BLOQUEADO with an empty
+    # narrative: the right verdict stripped of the evidence that
+    # invariant #11 requires it to carry.
+    if event.get("plan") and run.plan is None:
+        run.plan = event["plan"]
+
+    # The fix loop's real counter lives in the state machine ($.iteration);
+    # nothing was copying it onto the run, so every report said "0/N"
+    # however many corrections had actually run.
+    if event.get("iteration") is not None:
+        run.iterations_used = int(event["iteration"])
+
+    bucket = event.get("workspaces_bucket")
+    diff_text = ""
+    if bucket and s3_resource is not None:
+        try:
+            diff_text, run.changed_paths = compute_diff(s3_resource, bucket, str(run_id))
+            # The diff goes to S3, never into the run item. A DynamoDB item
+            # tops out at 400 KB shared with the plan and the narrative, so
+            # a large diff makes put_item raise -- after the verdict is
+            # already computed, which the Catch then turns into
+            # FALLIDO_CONTROLADO. The bigger a successful migration, the
+            # likelier it would be reported as a failure.
+            if diff_text:
+                run.diff_key = f"ws/{run_id}/diff.patch"
+                s3_resource.Object(bucket, run.diff_key).put(
+                    Body=diff_text.encode("utf-8"), ContentType="text/x-patch"
+                )
+            log_event("core_ops.diff", run_id=run_id, changed_paths=run.changed_paths,
+                      diff_chars=len(diff_text), diff_key=run.diff_key)
+        except Exception as exc:  # noqa: BLE001
+            log_event("core_ops.diff_failed", run_id=run_id, error=str(exc)[:300])
+
+    # Invariant #4, verified rather than assumed: the core re-derives the
+    # approved scope from the strategy manifest and the run's own
+    # restrictions, then checks what actually changed against it. The gate
+    # denies at write time; this catches anything that got through.
+    escaped: list[str] = []
+    if run.changed_paths:
+        try:
+            manifest = get_strategy_manifest(run.strategy_id)
+            scope = resolve_scope(
+                manifest.writable_paths,
+                manifest.excluded_paths,
+                run.restricciones.excluded_paths,
+            )
+            escaped = [p for p in run.changed_paths if not scope.allows(p)]
+        except Exception as exc:  # noqa: BLE001
+            log_event("core_ops.scope_check_failed", run_id=run_id, error=str(exc)[:300])
+
+    if escaped:
+        log_event("core_ops.diff_escaped_scope", run_id=run_id, paths=escaped)
+        _persist_denials(
+            str(run_id),
+            [{"tool_name": "diff", "reason": "changed path outside approved scope", "attempted_path": p}
+             for p in escaped],
+            events_table,
+        )
+
 
     elapsed_minutes = (
         (datetime.now(UTC) - run.created_at).total_seconds() - run.approval_wait_seconds
@@ -178,11 +259,14 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
         agent_concluded_infeasible=event.get("agent_concluded_infeasible", False),
         fix_iterations_exhausted_without_pass=event.get("fix_iterations_exhausted_without_pass", False),
         unrecoverable_error=event.get("unrecoverable_error", False),
+        approval_timed_out=event.get("approval_timed_out", False),
         suite_violation=violation,
         checks=event.get("checks", {}),
-        diff_within_writable_paths=event.get("diff_within_writable_paths", True),
+        diff_within_writable_paths=not escaped,
+        produced_changes=bool(run.changed_paths),
     )
-    status = evaluate_verdict(inputs)
+    status, reason_code = evaluate_verdict_with_reason(inputs)
+    run.reason_code = reason_code
 
     # Every input the verdict was computed from, so the decision is
     # auditable without re-running it (CLAUDE.md invariant #1/#10).
@@ -206,12 +290,6 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
         baseline_executed=baseline.executed,
         final_executed=final.executed,
     )
-
-    bucket = event.get("workspaces_bucket")
-    if bucket and s3_resource is not None:
-        run.diff, run.changed_paths = compute_diff(s3_resource, bucket, str(run_id))
-        log_event("core_ops.diff", run_id=run_id, changed_paths=run.changed_paths,
-                  diff_chars=len(run.diff or ""))
 
     run.status = status
     runs_table.put(run)
@@ -239,6 +317,8 @@ def _run(
         return _compute_verdict(event, runs_table, s3_resource=s3_resource)
     if action == "record_task_token":
         return _record_task_token(event, runs_table)
+    if action == "record_terminal_failure":
+        return _record_terminal_failure(event, runs_table)
     if action == "record_spend":
         return _record_spend(event, runs_table, events_table)
     raise UnknownActionError(f"action {action!r} is not implemented")

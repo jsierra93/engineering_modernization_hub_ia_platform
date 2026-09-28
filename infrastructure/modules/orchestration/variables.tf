@@ -59,6 +59,12 @@ variable "sandbox_security_group_ids" {
   type        = list(string)
 }
 
+variable "approval_timeout_seconds" {
+  description = "How long AwaitApproval waits for a human before the run stops. Step Functions' own default for a waitForTaskToken state is one year, which leaves the run's task token live and the run sitting in AWAITING_APPROVAL indefinitely. This is platform policy, not a per-run limit: the requester's max_minutes deliberately excludes approval wait, because it bounds the work and not the deliberation."
+  type        = number
+  default     = 86400 # 24 h
+}
+
 variable "sandbox_assign_public_ip" {
   description = "Whether the sandbox Fargate task gets a public IP. Must be true in the public network mode (no NAT gateway) so the task can reach the internet for its HTTPS egress (presigned S3 URLs, package indexes)."
   type        = bool

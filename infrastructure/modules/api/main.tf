@@ -14,11 +14,13 @@
 # var.lambda_source_dir is pointed at the real build output.
 #
 # IAM for this Lambda's execution role is scoped to exactly:
-#   - dynamodb:PutItem / GetItem / Query on the runs table (and its indexes)
-#   - states:StartExecution on the orchestration state machine
-# Nothing else - no events table, no S3, no other Bedrock or Lambda access.
-# (The one documented Bedrock exception in CLAUDE.md - the objective-to-
-# strategy resolver - is Fase 4 task 4.4-tf and is not part of this role yet.)
+#   - dynamodb:PutItem / GetItem / Query / UpdateItem on the runs table
+#   - dynamodb:Query on the events table (read-only; the report carries the
+#     run's SecurityBlocked events)
+#   - s3:GetObject on ws/*/diff.patch and nothing else in that bucket
+#   - states:StartExecution / SendTaskSuccess / SendTaskFailure
+#   - bedrock:InvokeModel on the ANALYSIS model only -- CLAUDE.md's one
+#     documented Bedrock exception, the objective-to-strategy resolver.
 
 locals {
   lambda_source_dir  = coalesce(var.lambda_source_dir, "${path.module}/placeholder_src")
@@ -98,6 +100,23 @@ data "aws_iam_policy_document" "api_lambda_scope" {
   }
 
   statement {
+    sid       = "EventsTableReadOnly"
+    effect    = "Allow"
+    actions   = ["dynamodb:Query"]
+    resources = [var.events_table_arn, "${var.events_table_arn}/index/*"]
+  }
+
+  # The only S3 access this Lambda has, and the narrowest shape that works:
+  # one object name under every run's prefix. It cannot read a workspace,
+  # a JUnit report or anything else in the bucket, and it cannot write.
+  statement {
+    sid       = "ReadRunDiffOnly"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${var.workspaces_bucket_arn}/ws/*/diff.patch"]
+  }
+
+  statement {
     sid       = "StartOrchestration"
     effect    = "Allow"
     actions   = ["states:StartExecution"]
@@ -161,6 +180,8 @@ resource "aws_lambda_function" "api" {
         MODHUB_STATE_MACHINE_ARN = var.state_machine_arn
         # Same var that scopes the InvokeModel policy above.
         BEDROCK_MODEL_ANALYSIS = var.analysis_model_id
+        MODHUB_WORKSPACE_BUCKET = var.workspaces_bucket_name
+        EVENTS_TABLE_NAME       = var.events_table_name
       },
       var.extra_environment_variables
     )

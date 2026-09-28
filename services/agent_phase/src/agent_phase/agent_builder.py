@@ -11,10 +11,10 @@ module gets to revisit:
     code path that constructs an Agent without one
   - the system prompt always includes the untrusted-content clause
 
-This module is the one place `BedrockModel` gets constructed for
-agent_phase -- so it's also where a Bedrock Guardrail (task 3.7-tf, once
-its ID/version exist as real infrastructure) plugs in via two constructor
-kwargs, not a code change.
+The Bedrock Guardrail is deliberately NOT a constructor kwarg on
+`BedrockModel`: see `guardrail.py` for why screening the whole turn
+blocks the platform's own instructions. It is handed to `build_tools`
+instead, which applies it to repo and document content only.
 """
 
 from __future__ import annotations
@@ -25,8 +25,9 @@ from core_py import ModelRole, resolve_model_id
 from strands import Agent
 from strands.models import BedrockModel
 
+from agent_phase.guardrail import Guardrail
 from agent_phase.policy_gate import DenialEvent, WritableScopeGate
-from agent_phase.tools import FetchDocFn, build_tools
+from agent_phase.tools import FetchDocFn, OnBlockFn, build_tools
 from agent_phase.untrusted import UNTRUSTED_CONTENT_SYSTEM_PROMPT_CLAUSE
 from agent_phase.workspace import Workspace
 
@@ -56,8 +57,8 @@ def build_agent(
     writable_paths: list[str],
     excluded_paths: list[str] | None = None,
     on_deny: Callable[[DenialEvent], None] | None = None,
-    guardrail_id: str | None = None,
-    guardrail_version: str | None = None,
+    guardrail: Guardrail | None = None,
+    on_block: OnBlockFn | None = None,
     region_name: str | None = None,
     include_write_tool: bool = True,
 ) -> Agent:
@@ -66,20 +67,19 @@ def build_agent(
         "temperature": 0,
         "max_tokens": max_tokens,
     }
-    # Task 3.7-tf: only added once a real Guardrail exists -- an agent
-    # built before then simply runs without one, rather than failing on a
-    # None value that isn't valid guardrail config.
-    if guardrail_id:
-        bedrock_kwargs["guardrail_id"] = guardrail_id
-        bedrock_kwargs["guardrail_version"] = guardrail_version or "DRAFT"
-
     model = BedrockModel(region_name=region_name, **bedrock_kwargs)
     gate = WritableScopeGate(
         writable_paths=writable_paths,
         excluded_paths=excluded_paths or [],
         on_deny=on_deny or (lambda _e: None),
     )
-    tools = build_tools(workspace, fetch_doc_fn, include_write=include_write_tool)
+    tools = build_tools(
+        workspace,
+        fetch_doc_fn,
+        include_write=include_write_tool,
+        guardrail=guardrail,
+        on_block=on_block,
+    )
 
     return Agent(
         model=model,

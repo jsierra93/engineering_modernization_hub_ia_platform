@@ -15,6 +15,7 @@ touches DynamoDB directly (CLAUDE.md's permissions table: agent_phase gets
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -22,6 +23,7 @@ from core_py import ModelRole, estimate_cost_usd, log_event, resolve_scope
 
 from agent_phase.agent_builder import build_agent
 from agent_phase.fetch_doc_client import make_fetch_doc_fn
+from agent_phase.guardrail import Guardrail, UntrustedContentBlocked
 from agent_phase.phases import run_discovery_plan, run_fix, run_implement
 from agent_phase.sandbox_handoff import copy_version, repackage_workspace_for_sandbox
 from agent_phase.strategy_lookup import get_strategy_manifest
@@ -29,9 +31,6 @@ from agent_phase.workspace import S3Workspace
 
 WORKSPACE_BUCKET_ENV = "MODHUB_WORKSPACE_BUCKET"
 FETCH_DOC_FUNCTION_NAME_ENV = "MODHUB_FETCH_DOC_FUNCTION_NAME"
-GUARDRAIL_ID_ENV = "MODHUB_BEDROCK_GUARDRAIL_ID"
-GUARDRAIL_VERSION_ENV = "MODHUB_BEDROCK_GUARDRAIL_VERSION"
-
 BASELINE_VERSION = "v0"
 WORKING_VERSION = "v1"
 
@@ -39,6 +38,14 @@ WORKING_VERSION = "v1"
 class UnknownPhaseError(Exception):
     """The ASL asked for a phase this handler doesn't implement. Fails
     loudly rather than silently no-op'ing a misconfigured state machine."""
+
+
+class PhaseProducedNothingError(Exception):
+    """A phase that burned zero tokens never reached the model at all --
+    a throttle, a rejected request, an input filter. `structured_output`
+    would still hand back a well-formed, empty result, which downstream
+    reads as "the agent had nothing to change" and a green run. Raising
+    here turns it into FALLIDO_CONTROLADO, per CLAUDE.md invariant #11."""
 
 
 def _run(
@@ -63,6 +70,12 @@ def _run(
     def on_deny(denial):
         denials.append({"tool_name": denial.tool_name, "reason": denial.reason, "attempted_path": denial.attempted_path})
 
+    def on_block(source: str):
+        denials.append({"tool_name": "guardrail", "reason": "prompt_attack_filter", "attempted_path": source})
+        log_event("agent_phase.guardrail_blocked", run_id=run_id, phase=phase, source=source)
+
+    guardrail = Guardrail.from_env()
+
     scope = resolve_scope(
         manifest.writable_paths,
         manifest.excluded_paths,
@@ -75,8 +88,8 @@ def _run(
         writable_paths=scope.writable_paths,
         excluded_paths=scope.excluded_paths,
         on_deny=on_deny,
-        guardrail_id=os.environ.get(GUARDRAIL_ID_ENV),
-        guardrail_version=os.environ.get(GUARDRAIL_VERSION_ENV),
+        guardrail=guardrail,
+        on_block=on_block,
     )
 
     handoff: dict[str, Any] = {}
@@ -115,6 +128,12 @@ def _run(
         junit_failure_excerpt = (
             s3_resource.Object(bucket, event["junit_key"]).get()["Body"].read().decode("utf-8", errors="replace")
         )
+        if guardrail is not None:
+            try:
+                guardrail.screen(junit_failure_excerpt, source="junit:verify")
+            except UntrustedContentBlocked:
+                on_block("junit:verify")
+                junit_failure_excerpt = "(test output withheld: blocked by the platform guardrail)"
         result = run_fix(
             agent,
             junit_failure_excerpt=junit_failure_excerpt,
@@ -133,6 +152,9 @@ def _run(
     # (CLAUDE.md's permissions table) -- core_ops is what must apply this
     # delta to the run's budget ledger via RunsTable.add_spend.
     usage = agent.event_loop_metrics.accumulated_usage
+    if usage["inputTokens"] == 0 and usage["outputTokens"] == 0:
+        raise PhaseProducedNothingError(f"phase {phase!r} consumed no tokens -- the model was never reached")
+
     cost_usd = estimate_cost_usd(
         agent.model.get_config()["model_id"],
         usage["inputTokens"],
@@ -150,7 +172,7 @@ def _run(
         denials=len(denials),
     )
 
-    return {
+    response = {
         "run_id": run_id,
         "phase": phase,
         "model_id": agent.model.get_config()["model_id"],
@@ -159,6 +181,41 @@ def _run(
         "cost_usd": cost_usd,
         **handoff,
     }
+
+    _persist_phase_trail(s3_resource, bucket, run_id, phase, event, response)
+    return response
+
+
+def _persist_phase_trail(
+    s3_resource: Any,
+    bucket: str,
+    run_id: str,
+    phase: str,
+    phase_input: dict[str, Any],
+    phase_output: dict[str, Any],
+) -> None:
+    """CLAUDE.md: "Each phase persists its input and output to S3, which is
+    what makes the replay mode possible." Nothing was writing it, so the
+    trail the replay depends on did not exist -- and a run's reasoning was
+    reconstructible only from CloudWatch, which expires.
+
+    Best-effort on purpose: this is an audit trail, not an input to any
+    decision. A failure to write it must not fail a phase that already did
+    its work and already cost money."""
+
+    trail = {
+        "phase": phase,
+        "input": phase_input,
+        "output": {key: value for key, value in phase_output.items() if key != "result"},
+        "result": phase_output.get("result"),
+    }
+    try:
+        s3_resource.Object(bucket, f"ws/{run_id}/phases/{phase}.json").put(
+            Body=json.dumps(trail, default=str).encode("utf-8"),
+            ContentType="application/json",
+        )
+    except Exception as exc:  # noqa: BLE001 - audit trail, never a verdict input
+        log_event("agent_phase.trail_write_failed", run_id=run_id, phase=phase, error=str(exc)[:200])
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:

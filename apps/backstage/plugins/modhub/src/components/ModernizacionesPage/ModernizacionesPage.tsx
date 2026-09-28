@@ -13,7 +13,7 @@ import {
 } from '@backstage/core-components';
 import { useApi } from '@backstage/core-plugin-api';
 import { useSignal } from '@backstage/plugin-signals-react';
-import { Button, FormControlLabel, Switch } from '@material-ui/core';
+import { Button } from '@material-ui/core';
 import { modhubApiRef } from '../../apis';
 import { Run } from '../../api/types';
 import { CreateRunDialog } from '../CreateRunDialog';
@@ -71,16 +71,12 @@ const buildColumns = (
 
 /**
  * Fase 5, task 5.3. Reads real data from modhub/v1 (via modhub-backend's
- * proxy, task 5.2) -- no mock rows. `mine`/`status` filters mirror the
- * design artifact's stated CLI convention (`inbox` =
- * `mine=true&status=AWAITING_APPROVAL`), exposed here as a simple toggle
- * plus a status the user types, since a full filter bar was judged not
- * worth the extra UI for a "mínimo real" pass -- see the session's own
- * gap-analysis note on Fase 5's scope.
+ * proxy, task 5.2) -- no mock rows. Always `mine=true`: in this MVP a
+ * developer can only review and approve their own runs, so offering the
+ * other half of the filter would show rows nothing can be done with.
  */
 export const ModernizacionesPage = () => {
   const modhubApi = useApi(modhubApiRef);
-  const [mineOnly, setMineOnly] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [reviewing, setReviewing] = useState<Run | null>(null);
   const [reportRunId, setReportRunId] = useState<string | null>(null);
@@ -95,8 +91,8 @@ export const ModernizacionesPage = () => {
   }, [lastSignal]);
 
   const { value: runs, loading, error } = useAsync(
-    async () => modhubApi.listRuns({ mine: mineOnly }),
-    [modhubApi, mineOnly, refreshKey],
+    async () => modhubApi.listRuns({ mine: true }),
+    [modhubApi, refreshKey],
   );
 
   return (
@@ -104,20 +100,10 @@ export const ModernizacionesPage = () => {
       <Header title="Modernizaciones" subtitle="Engineering Modernization Hub" />
       <Content>
         <ContentHeader title="Runs">
-          <FormControlLabel
-            control={
-              <Switch
-                checked={mineOnly}
-                onChange={event => setMineOnly(event.target.checked)}
-              />
-            }
-            label="Solo mías"
-          />
           <Button
             variant="contained"
             color="primary"
             onClick={() => setCreateOpen(true)}
-            style={{ marginLeft: 16 }}
           >
             Nueva solicitud
           </Button>

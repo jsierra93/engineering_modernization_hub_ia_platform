@@ -69,6 +69,24 @@ variable "lambda_handler" {
   default     = "api.handler.handler"
 }
 
+variable "events_table_name" {
+  description = "Events table. lambda api reads it for GET /runs/{id}/report, which carries the run's SecurityBlocked events -- the brief requires the injection scenario to register the event, and an event only registered where nobody can see it is not evidence."
+  type        = string
+}
+
+variable "events_table_arn" {
+  type = string
+}
+
+variable "workspaces_bucket_name" {
+  description = "Bucket holding each run's workspace. lambda api reads one object from it: the diff that core_ops wrote, which GET /runs/{id}/report inlines. The diff lives in S3 rather than on the run item because a DynamoDB item tops out at 400 KB."
+  type        = string
+}
+
+variable "workspaces_bucket_arn" {
+  type = string
+}
+
 variable "extra_environment_variables" {
   description = "Additional Lambda environment variables merged on top of the module's own (RUNS_TABLE_NAME, MODHUB_STATE_MACHINE_ARN). Used by envs/local to point the bundled boto3 clients at a local emulator endpoint (AWS_ENDPOINT_URL) - never needed against real AWS."
   type        = map(string)

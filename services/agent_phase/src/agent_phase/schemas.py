@@ -52,13 +52,30 @@ class DiscoveryPlan(_NullTolerant):
 
     viable: bool = Field(description="Whether this modernization can be completed within the given constraints.")
     viability_reason: str = Field(description="Why viable, or why not -- cites sources where relevant.")
-    summary: str = Field(description="One-paragraph summary of what will change and why.")
+    summary: str = Field(
+        default="",
+        description="One-paragraph summary of what will change and why. Required when viable.",
+    )
     planned_changes: list[PlannedFileChange] = Field(default_factory=list)
     sources: list[str] = Field(
         default_factory=list,
         description="URLs actually consulted via the fetch_doc tool -- not invented citations.",
     )
     risks: list[str] = Field(default_factory=list, description="Known risks or edge cases this plan doesn't cover.")
+
+    @model_validator(mode="after")
+    def _summary_required_when_viable(self) -> DiscoveryPlan:
+        """A plain required `summary` turned a correct conclusion into a
+        platform error: asked to summarise "what will change" on a repo it
+        had just ruled out, the model omitted the field, validation failed,
+        and a reasoned infeasibility surfaced as FALLIDO_CONTROLADO instead
+        of BLOQUEADO -- the exact confusion invariant #11 exists to prevent.
+        The guarantee is kept where it means something: a viable plan still
+        has to say what it will do."""
+
+        if self.viable and not self.summary.strip():
+            raise ValueError("summary is required when viable is true")
+        return self
 
 
 class FileEdit(BaseModel):

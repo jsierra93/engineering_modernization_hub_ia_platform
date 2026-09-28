@@ -19,12 +19,19 @@ import tarfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-# A few hundred MB of decompressed source is generous for a single repo
-# checkout at one commit; anything past this is either not a source repo
-# or a zip-bomb-style decompression attack. Chosen as a round, defensible
-# number rather than tuned to any real repo.
-MAX_TOTAL_UNCOMPRESSED_BYTES = 300 * 1024 * 1024  # 300 MB
-MAX_SINGLE_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
+# Sized against the memory that has to enforce it, not against what a
+# "generous" repo looks like. `fetch_and_store_repo` holds three copies at
+# once -- the downloaded tarball, every decompressed member in a list, and
+# the consolidated archive it rebuilds for the sandbox's presigned GET --
+# inside a 512 MB Lambda. The previous 300 MB was therefore unreachable:
+# the function died of an opaque OOM long before the limit could produce a
+# clean TarSanitizationError, so the declared protection never ran.
+#
+# The real fix is to stream members to S3 instead of materialising them,
+# which removes two of the three copies and lets this number go back up.
+# Until then the limit says what the process can actually survive.
+MAX_TOTAL_UNCOMPRESSED_BYTES = 120 * 1024 * 1024  # 120 MB
+MAX_SINGLE_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 class TarSanitizationError(Exception):

@@ -22,18 +22,29 @@ from typing import Any
 
 import boto3
 
+from botocore.exceptions import ClientError
+from pydantic import ValidationError
+
 from core_py.models import Restricciones, Run, RunStatus
 from core_py.observability import log_event
-from core_py.persistence import ApprovalConflictError, RunsTable
+from core_py.persistence import ApprovalConflictError, EventsTable, RunsTable
 
-from api.resolver import NoStrategyMatchError, resolve_strategy
+from api.resolver import NoStrategyMatchError, ResolverUnavailableError, resolve_strategy
 from api.strategy_lookup import list_strategy_manifests
 
 STATE_MACHINE_ARN_ENV = "MODHUB_STATE_MACHINE_ARN"
+WORKSPACE_BUCKET_ENV = "MODHUB_WORKSPACE_BUCKET"
 
 APPROVAL_MAX_AUTH_AGE_SECONDS_ENV = "MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS"
 
 DEV_STRATEGY_ID_ENV = "MODHUB_DEV_STRATEGY_ID"
+
+# Comma-separated `owner/name` or `owner/*`. Unset means any well-formed
+# repo, which is the prototype's posture: the requester supplies the
+# repository and the sandbox has no credentials to abuse. The hook exists
+# because the design document already promised this control, and because
+# an internal deployment would want it.
+REPO_ALLOWLIST_ENV = "MODHUB_REPO_ALLOWLIST"
 DEFAULT_APPROVAL_MAX_AUTH_AGE_SECONDS = 300
 
 # CLAUDE.md invariant #5: request <= strategy max <= platform ceiling.
@@ -44,6 +55,11 @@ DEFAULT_APPROVAL_MAX_AUTH_AGE_SECONDS = 300
 # core_ops.limits.resolve_limits: api and core_ops are separately packaged
 # Lambdas (see api/strategy_lookup.py's own comment on this boundary).
 LIMIT_FIELDS = ("max_usd", "max_iterations", "max_minutes")
+
+
+def _repo_is_allowed(repo: str, allowlist: list[str]) -> bool:
+    owner = repo.split("/", 1)[0]
+    return repo in allowlist or f"{owner}/*" in allowlist
 
 
 def _loggable_body(event: dict[str, Any]) -> Any:
@@ -75,9 +91,16 @@ def _ok_response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _requested_by(event: dict[str, Any]) -> str:
-    """Extract the caller's sub. No Cognito authorizer is wired yet
-    (that's Fase 4, task 4.2-tf) so this falls back to a header for local
-    testing."""
+    """The caller's `sub`, which every Cognito token carries -- it is a
+    required OIDC claim, and for a machine-to-machine token it is the app
+    client id rather than being absent.
+
+    The header fallback only ever runs where no JWT authorizer did (the
+    local env, which sets `enable_jwt_authorizer = false`). With the
+    authorizer on, API Gateway rejects the request before this code runs,
+    so the header cannot be used to impersonate anyone. It resolves to a
+    sub that owns no runs, so every scoping decision built on it fails
+    closed."""
     claims = (
         event.get("requestContext", {})
         .get("authorizer", {})
@@ -88,6 +111,23 @@ def _requested_by(event: dict[str, Any]) -> str:
         return claims["sub"]
     headers = event.get("headers") or {}
     return headers.get("x-requested-by") or headers.get("X-Requested-By") or "anonymous"
+
+
+def _load_own_run(event: dict[str, Any], runs_table: RunsTable, run_id: str):
+    """The run, if it belongs to the caller. Otherwise the 404 to return.
+
+    A run someone else requested is reported as not found, not as
+    forbidden: 403 would confirm that a given run_id exists, which is the
+    one thing an unauthorized caller could learn from an id they guessed.
+    Approval answers 403 instead, deliberately -- there the caller already
+    holds the id from their own inbox, and "you may not approve this" is
+    more useful than pretending it is missing.
+    """
+
+    run = runs_table.get(run_id)
+    if run is None or run.requested_by != _requested_by(event):
+        return None, _error_response(404, "RUN_NOT_FOUND", "No run with that id.", run_id)
+    return run, None
 
 
 def _get_trace_id(event: dict[str, Any]) -> str:
@@ -149,6 +189,15 @@ def create_run(
 
     requested_by = _requested_by(event)
 
+    allowlist = [entry.strip() for entry in os.environ.get(REPO_ALLOWLIST_ENV, "").split(",") if entry.strip()]
+    if allowlist and not _repo_is_allowed(str(body.get("repo", "")), allowlist):
+        return _error_response(
+            403,
+            "REPO_NOT_ALLOWED",
+            f"{body.get('repo')!r} is not on this deployment's repository allowlist.",
+            None,
+        )
+
     candidates = list_strategy_manifests()
     dev_strategy_id = os.environ.get(DEV_STRATEGY_ID_ENV)
     if dev_strategy_id:
@@ -173,41 +222,81 @@ def create_run(
         match_confidence = 1.0
     else:
         try:
+            # No client built here on purpose: the one documented Bedrock
+            # call stays inside services/api/resolver (CLAUDE.md).
             manifest, match_confidence = resolve_strategy(
-                body["objetivo"], candidates, bedrock_client=bedrock_client or boto3.client("bedrock-runtime")
+                body["objetivo"], candidates, bedrock_client=bedrock_client
             )
-        except NoStrategyMatchError:
+        except NoStrategyMatchError as exc:
+            return _error_response(422, "NO_STRATEGY_MATCH", str(exc), None)
+        except ResolverUnavailableError as exc:
+            # Retryable and not the caller's fault -- a throttle answered
+            # 500 before, which reads as "this request is broken" rather
+            # than "try again". No run exists yet, so there is nothing to
+            # mark FALLIDO_CONTROLADO.
+            log_event("api.resolver_unavailable", trace_id=trace_id, error=str(exc)[:300])
             return _error_response(
-                422,
-                "NO_STRATEGY_MATCH",
-                "No registered strategy matches this objetivo.",
+                503,
+                "RESOLVER_UNAVAILABLE",
+                "The objective could not be resolved right now. Retry shortly.",
                 None,
             )
 
     for field in LIMIT_FIELDS:
+        value = body[field]
+        # `bool` is a subclass of `int`, so `max_usd: true` would sail past
+        # a plain isinstance check and compare as 1 -- accepted in silence
+        # with a nonsensical limit. And comparing a str against a float
+        # raises TypeError here, turning bad input into a 500 before the
+        # model ever sees it.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return _error_response(
+                422,
+                "INVALID_LIMIT",
+                f"{field} must be a number, got {type(value).__name__}.",
+                None,
+            )
+        if value <= 0:
+            return _error_response(
+                422, "INVALID_LIMIT", f"{field} must be greater than zero.", None
+            )
+
         limit_max = getattr(manifest.limits, field).max
-        if body[field] > limit_max:
+        if value > limit_max:
             return _error_response(
                 422,
                 "LIMIT_EXCEEDS_STRATEGY_MAX",
-                f"requested {field}={body[field]} exceeds strategy {manifest.id}'s max of {limit_max}.",
+                f"requested {field}={value} exceeds strategy {manifest.id}'s max of {limit_max}.",
                 None,
             )
 
-    run = Run(
-        repo=body["repo"],
-        commit=body["commit"],
-        objetivo=body["objetivo"],
-        inputs=body.get("inputs", {}),
-        restricciones=Restricciones(**body.get("restricciones", {})),
-        requested_by=requested_by,
-        strategy_id=manifest.id,
-        strategy_version=manifest.version,
-        max_usd=body["max_usd"],
-        max_iterations=body["max_iterations"],
-        max_minutes=body["max_minutes"],
-        status=RunStatus.PENDING,
-    )
+    # Every constraint below -- the 40-character commit, a non-empty
+    # objetivo, `extra="forbid"` on restricciones -- is a statement about
+    # the request, so breaking one is the caller's error, not the server's.
+    # Uncaught, pydantic's ValidationError propagated and API Gateway
+    # answered 500, which tells a client "retry, the server is broken" for
+    # input that will fail identically every time.
+    try:
+        run = Run(
+            repo=body["repo"],
+            commit=body["commit"],
+            objetivo=body["objetivo"],
+            inputs=body.get("inputs", {}),
+            restricciones=Restricciones(**body.get("restricciones", {})),
+            requested_by=requested_by,
+            strategy_id=manifest.id,
+            strategy_version=manifest.version,
+            max_usd=body["max_usd"],
+            max_iterations=body["max_iterations"],
+            max_minutes=body["max_minutes"],
+            status=RunStatus.PENDING,
+        )
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()
+        )
+        log_event("api.invalid_request", trace_id=trace_id, problems=problems)
+        return _error_response(422, "INVALID_REQUEST", problems, None)
 
     runs_table.put(run)
     log_event(
@@ -272,25 +361,24 @@ def list_runs(
     route (it backs `modhub inbox`/`modhub runs` and Backstage's
     Modernizaciones list), but no handler existed for it before now.
 
-    No unscoped "list every run" mode -- with neither filter, this scopes
-    to the caller's own runs (query_by_requested_by), never a full table
-    scan. `status` alone queries across all users by status (still a GSI
-    query, not a scan); `mine=true` narrows further to the caller's own
-    within Python once both are given, since RunsTable has no compound
-    index over (requested_by, status).
+    Always scoped to the caller's own `sub`. `mine` is accepted and
+    ignored: a caller can only act on their own runs (invariant #7 gates
+    approval on `sub == requested_by`), so listing anyone else's was
+    surfacing rows nothing could be done with. Scoping in the client was
+    a filter; scoping here is a control.
+
+    Fails closed by construction: with no JWT claims `_requested_by`
+    yields a sub that owns no runs, which returns an empty list -- never
+    the whole table.
     """
 
     query_params = event.get("queryStringParameters") or {}
-    mine = (query_params.get("mine") or "").lower() == "true"
     status = query_params.get("status")
     sub = _requested_by(event)
 
-    if status and mine:
-        runs = [run for run in runs_table.query_by_requested_by(sub) if run.status.value == status]
-    elif status:
-        runs = runs_table.query_by_status(status)
-    else:
-        runs = runs_table.query_by_requested_by(sub)
+    runs = runs_table.query_by_requested_by(sub)
+    if status:
+        runs = [run for run in runs if run.status.value == status]
 
     runs.sort(key=lambda run: run.created_at, reverse=True)
     return _ok_response(
@@ -299,7 +387,56 @@ def list_runs(
     )
 
 
-def get_report(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
+SECURITY_EVENT_TYPES = ("SecurityBlocked",)
+
+
+def _security_events(run_id: str, events_table: EventsTable | None) -> list[dict[str, Any]]:
+    """The run's security events, for the report.
+
+    The brief's injection scenario requires the platform to "registrar el
+    evento". They are written to the events table by core_ops, but until
+    now nothing surfaced them: the control worked and left no visible
+    trace, which is not evidence. Read-only here -- lambda api has Query
+    and no write permission on that table, so the report cannot alter the
+    audit trail it displays."""
+
+    if events_table is None:
+        return []
+    try:
+        return [
+            {"type": e.type, "message": e.message, "data": e.data}
+            for e in events_table.query_by_run_id(run_id)
+            if e.type in SECURITY_EVENT_TYPES
+        ]
+    except Exception as exc:  # noqa: BLE001 - evidence, never a verdict input
+        log_event("api.events_read_failed", run_id=run_id, error=str(exc)[:200])
+        return []
+
+
+def _read_diff(run: Run, s3_resource: Any) -> str | None:
+    """Fetch the diff from S3 so the report stays self-contained.
+
+    Read on demand rather than stored on the run: a diff can reach
+    hundreds of KB and a DynamoDB item tops out at 400 KB. A missing or
+    unreadable object degrades to no diff -- it is evidence attached to a
+    verdict, never an input to it, so it must not fail the report."""
+
+    bucket = os.environ.get(WORKSPACE_BUCKET_ENV)
+    if not run.diff_key or not bucket or s3_resource is None:
+        return None
+    try:
+        return s3_resource.Object(bucket, run.diff_key).get()["Body"].read().decode("utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        log_event("api.diff_read_failed", run_id=str(run.run_id), key=run.diff_key, error=str(exc)[:200])
+        return None
+
+
+def get_report(
+    event: dict[str, Any],
+    runs_table: RunsTable,
+    s3_resource: Any = None,
+    events_table: EventsTable | None = None,
+) -> dict[str, Any]:
     """Handle `GET /modhub/v1/runs/{run_id}/report` -- what the run
     delivers: the verdict core_ops computed, the diff it measured from S3,
     and the agent's own narrative. Separate authors, one document
@@ -310,9 +447,9 @@ def get_report(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
     if not run_id:
         return _error_response(400, "MISSING_RUN_ID", "run_id path parameter is required.", None)
 
-    run = runs_table.get(run_id)
-    if run is None:
-        return _error_response(404, "RUN_NOT_FOUND", "No run with that id.", run_id)
+    run, denied = _load_own_run(event, runs_table, run_id)
+    if denied:
+        return denied
 
     plan = run.plan or {}
     return _ok_response(
@@ -337,8 +474,11 @@ def get_report(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
                 "sources": plan.get("sources", []),
                 "risks": plan.get("risks", []),
             },
+            "reason_code": run.reason_code,
+            "security_events": _security_events(run_id, events_table),
             "changed_paths": run.changed_paths,
-            "diff": run.diff,
+            "pull_request_url": run.pull_request_url,
+            "diff": _read_diff(run, s3_resource),
             "models_used": run.models_used,
             "plan_hash": run.plan_hash,
             "created_at": run.created_at,
@@ -362,9 +502,9 @@ def get_run(
     except ValueError:
         return _error_response(400, "INVALID_RUN_ID", "run_id must be a UUID.", run_id)
 
-    run = runs_table.get(run_id)
-    if run is None:
-        return _error_response(404, "RUN_NOT_FOUND", "No run with that id.", run_id)
+    run, denied = _load_own_run(event, runs_table, run_id)
+    if denied:
+        return denied
 
     # task_token is an internal Step Functions callback detail (Fase 4),
     # never part of the public API contract -- see packages/contracts/
@@ -432,6 +572,22 @@ def handle_approval(
             run_id,
         )
 
+    # Before the conditional write, not after. The callback is the only
+    # thing that actually resumes the execution; without a token there is
+    # nothing to call, and writing the status first would leave the run
+    # reading RUNNING while the state machine sat in AwaitApproval until
+    # its timeout -- which would then report APPROVAL_TIMED_OUT and blame
+    # a human who did approve. Failing here keeps the run in
+    # AWAITING_APPROVAL, where the timeout still means what it says.
+    if not run.task_token:
+        log_event("api.approval_without_token", run_id=run_id, status=run.status.value)
+        return _error_response(
+            409,
+            "RUN_NOT_WAITING",
+            "This run is not currently waiting for an approval callback.",
+            run_id,
+        )
+
     new_status = RunStatus.RUNNING if decision == "approve" else RunStatus.CANCELADO
 
     try:
@@ -457,7 +613,7 @@ def handle_approval(
     # The Run row we already read still carries the task_token recorded by
     # AwaitApproval (record_task_token) -- reading it again post-update
     # would just refetch the same value now paired with the new status.
-    if run.task_token:
+    try:
         if decision == "approve":
             sfn_client.send_task_success(
                 taskToken=run.task_token,
@@ -469,6 +625,35 @@ def handle_approval(
                 error="ApprovalRejected",
                 cause=body.get("reason") or "Rejected by requester.",
             )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        log_event("api.approval_callback_failed", run_id=run_id, error_code=code, error=str(exc)[:300])
+
+        if code in ("TaskTimedOut", "TaskDoesNotExist"):
+            # The execution already stopped waiting -- AwaitApproval hit
+            # its timeout, or the run ended some other way. Nothing to
+            # resume and nothing to retry, so the status stays where the
+            # conditional write left it rather than pretending the run is
+            # back in the queue.
+            return _error_response(
+                409,
+                "RUN_NO_LONGER_WAITING",
+                "This run stopped waiting for approval before the decision reached it.",
+                run_id,
+            )
+
+        # Anything else is transient. Put the run back where it was so the
+        # same request can simply be retried -- leaving it decided would
+        # make every retry fail the conditional write with a 409 and strand
+        # the requester with no way forward.
+        run.status = RunStatus.AWAITING_APPROVAL
+        runs_table.put(run)
+        return _error_response(
+            503,
+            "APPROVAL_CALLBACK_FAILED",
+            "The decision was recorded but could not be delivered. Retry shortly.",
+            run_id,
+        )
 
     run.status = new_status
     return _ok_response(200, run.model_dump(mode="json", exclude={"task_token"}))
@@ -505,7 +690,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         elif method == "POST" and path_params.get("run_id") and raw_path.endswith("/approval"):
             response = handle_approval(event, runs_table, sfn_client)
         elif method == "GET" and path_params.get("run_id") and raw_path.endswith("/report"):
-            response = get_report(event, runs_table)
+            response = get_report(event, runs_table, boto3.resource("s3"), EventsTable())
         elif method == "GET" and path_params.get("run_id"):
             response = get_run(event, runs_table)
         elif method == "GET" and "run_id" not in path_params:

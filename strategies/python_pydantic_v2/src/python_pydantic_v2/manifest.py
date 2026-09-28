@@ -35,9 +35,17 @@ _WRITABLE_PATHS = [
     "pyproject.toml",
     "requirements*.txt",
 ]
+# conftest.py and the pytest/ruff config decide how the checks run and what
+# they report. A strategy that let the agent rewrite them would be handing
+# it the pen that writes its own verdict (invariant #2), so they stay out of
+# scope even though they are Python and sit inside writable_paths.
 _EXCLUDED_PATHS = [
     "**/ci/**",
     "**/*.tf",
+    "**/conftest.py",
+    "pytest.ini",
+    "tox.ini",
+    "setup.cfg",
 ]
 
 _SOURCES = ["https://docs.pydantic.dev/latest/migration/"]

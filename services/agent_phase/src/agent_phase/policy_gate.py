@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from core_py.scope import matches
+from core_py.scope import ResolvedScope
 
 from strands.hooks import BeforeToolCallEvent
 from strands.interventions import Deny, InterventionHandler, Proceed
@@ -63,11 +63,12 @@ class WritableScopeGate(InterventionHandler):
         return "writable-scope-gate"
 
     def _is_writable(self, path: str) -> bool:
-        # Exclusions win: neither side can re-open what the other closed
-        # (core_py.scope.resolve_scope, CLAUDE.md invariant #4).
-        if any(matches(path, pattern) for pattern in self.excluded_paths):
-            return False
-        return any(matches(path, pattern) for pattern in self.writable_paths)
+        # One implementation of the decision, shared with whatever else
+        # checks a path: a second copy is a second place to get `..` wrong.
+        return ResolvedScope(
+            writable_paths=self.writable_paths,
+            excluded_paths=self.excluded_paths,
+        ).allows(path)
 
     def before_tool_call(self, event: BeforeToolCallEvent, **kwargs):
         tool_name = event.tool_use["name"]

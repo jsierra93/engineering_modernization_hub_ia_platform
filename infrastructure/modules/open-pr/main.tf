@@ -35,10 +35,28 @@ data "aws_iam_policy_document" "open_pr_scope" {
   }
 
   statement {
-    sid       = "ReadRunsNeverWrite"
+    sid       = "ReadRuns"
     effect    = "Allow"
     actions   = ["dynamodb:GetItem"]
     resources = [var.runs_table_arn]
+  }
+
+  # UpdateItem exists for one purpose: recording the PR this Lambda just
+  # created. The attribute condition is what keeps it to that -- without
+  # it, "can write the runs table" would mean this Lambda could move a
+  # verdict or an approval state. Kept in its own statement so the
+  # condition applies to the write and never narrows the read.
+  statement {
+    sid       = "RecordPullRequestOnly"
+    effect    = "Allow"
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [var.runs_table_arn]
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "dynamodb:Attributes"
+      values   = ["run_id", "pull_request_url", "pull_request_branch"]
+    }
   }
 
   statement {

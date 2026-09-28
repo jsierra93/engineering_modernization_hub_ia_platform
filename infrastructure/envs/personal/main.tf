@@ -55,7 +55,7 @@ module "sandbox_network" {
   ecr_force_delete     = true
   # Pushed by hand to the repo this module creates; the repo is IMMUTABLE,
   # so a rebuilt image needs a new tag here.
-  sandbox_image_tag    = "v3"
+  sandbox_image_tag    = "v4"
 }
 
 module "notifications" {
@@ -105,10 +105,22 @@ module "api" {
   lambda_architectures    = local.lambda_architectures
   aws_region              = var.aws_region
   analysis_model_id       = local.analysis_model_id
+  workspaces_bucket_name  = module.persistence.workspaces_bucket_name
+  workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
+  events_table_name       = module.persistence.events_table_name
+  events_table_arn        = module.persistence.events_table_arn
 
   enable_open_pr_route         = true
   open_pr_lambda_invoke_arn    = module.open_pr.lambda_invoke_arn
   open_pr_lambda_function_name = module.open_pr.lambda_function_name
+
+  # Invariant #7 asks for recent auth before approving. 300s is the real
+  # value; 3600 is a concession to the fixed dev token, whose auth_time is
+  # frozen when start-backstage.sh mints it and cannot be refreshed while
+  # the browser OIDC flow is blocked (PLAN.md 5.6). Restore 300 once it is.
+  extra_environment_variables = {
+    MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS = "3600"
+  }
 
   enable_jwt_authorizer = true
   jwt_issuer             = module.identity.issuer_url
