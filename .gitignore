@@ -219,6 +219,8 @@ __marimo__/
 
 *.terraform
 *.tfstate*
+tfplan.out
+*.tfplan
 *.lock.hcl
 !README.md
 *.md
