@@ -167,7 +167,12 @@ def _record_terminal_failure(event: dict[str, Any], runs_table: RunsTable) -> di
     return {"run_id": str(run_id), "status": run.status.value}
 
 
-def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: Any = None) -> dict[str, Any]:
+def _compute_verdict(
+    event: dict[str, Any],
+    runs_table: RunsTable,
+    s3_resource: Any = None,
+    events_table: EventsTable | None = None,
+) -> dict[str, Any]:
     run_id = event["run_id"]
     run = runs_table.get(run_id)
     if run is None:
@@ -178,6 +183,19 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
     baseline: JUnitSummary = parse_junit(baseline_xml)
     final: JUnitSummary = parse_junit(final_xml)
     violation = check_suite_integrity(baseline, final)
+    if violation is not None:
+        # Invariant #2 is explicit: "A violation is FALLIDO_CONTROLADO plus a
+        # SecurityBlocked event, never a warning." It was exactly a warning --
+        # the violation reached log_event and the response, and nothing else.
+        # A CloudWatch line expires and is not in the report; the event table
+        # is what the run carries forward as evidence that the suite was
+        # weakened.
+        _persist_denials(
+            str(run_id),
+            [{"tool_name": "suite_integrity", "reason": f"test suite weakened: {violation}",
+              "attempted_path": None}],
+            events_table,
+        )
 
     # The infeasible path never reaches RecordPlan -- it must not, since
     # that state also moves the run to AWAITING_APPROVAL, and there is
@@ -232,6 +250,14 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
         except Exception as exc:  # noqa: BLE001
             log_event("core_ops.scope_check_failed", run_id=run_id, error=str(exc)[:300])
 
+    # Dead today: the policy gate denies an out-of-scope write before it
+    # lands, so `escaped` stays empty. That is exactly why it was broken --
+    # `events_table` was never a parameter here, and the branch had never
+    # run. A backstop that raises NameError is worse than none: the whole
+    # verdict computation would fail, the ASL Catch would write a bare
+    # FALLIDO_CONTROLADO with no reason_code, and the SecurityBlocked event
+    # naming the escaped paths -- the one piece of evidence that matters
+    # when the primary control has a hole -- would never be persisted.
     if escaped:
         log_event("core_ops.diff_escaped_scope", run_id=run_id, paths=escaped)
         _persist_denials(
@@ -274,6 +300,10 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
         "core_ops.verdict",
         run_id=run_id,
         status=status.value,
+        reason_code=reason_code,
+        diff_within_writable_paths=inputs.diff_within_writable_paths,
+        produced_changes=inputs.produced_changes,
+        approval_timed_out=inputs.approval_timed_out,
         spent_usd=run.spent_usd,
         max_usd=run.max_usd,
         elapsed_minutes=round(elapsed_minutes, 2),
@@ -297,6 +327,7 @@ def _compute_verdict(event: dict[str, Any], runs_table: RunsTable, s3_resource: 
     return {
         "run_id": str(run_id),
         "status": status.value,
+        "reason_code": reason_code,
         "suite_violation": violation,
         "baseline": {"executed": baseline.executed, "passed": baseline.passed},
         "final": {"executed": final.executed, "passed": final.passed},
@@ -314,7 +345,7 @@ def _run(
     if action == "record_plan":
         return _record_plan(event, runs_table)
     if action == "compute_verdict":
-        return _compute_verdict(event, runs_table, s3_resource=s3_resource)
+        return _compute_verdict(event, runs_table, s3_resource=s3_resource, events_table=events_table)
     if action == "record_task_token":
         return _record_task_token(event, runs_table)
     if action == "record_terminal_failure":

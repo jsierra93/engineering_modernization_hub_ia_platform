@@ -67,6 +67,16 @@
           ]
         }
       },
+      "Retry": [
+        {
+          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "TimeoutSeconds": ${sandbox_task_timeout_seconds},
       "ResultPath": "$.baseline_result",
       "Catch": [
         {
@@ -148,6 +158,16 @@
           ]
         }
       },
+      "Retry": [
+        {
+          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "TimeoutSeconds": ${sandbox_task_timeout_seconds},
       "ResultPath": "$.baseline_lint_result",
       "Catch": [
         {
@@ -526,6 +546,16 @@
           ]
         }
       },
+      "Retry": [
+        {
+          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "TimeoutSeconds": ${sandbox_task_timeout_seconds},
       "ResultPath": "$.verify_result",
       "Catch": [
         {
@@ -862,6 +892,16 @@
           ]
         }
       },
+      "Retry": [
+        {
+          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "TimeoutSeconds": ${sandbox_task_timeout_seconds},
       "ResultPath": "$.lint_result",
       "Catch": [
         {

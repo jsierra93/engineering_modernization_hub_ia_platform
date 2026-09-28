@@ -23,6 +23,12 @@ from typing import Any
 
 GUARDRAIL_ID_ENV = "MODHUB_BEDROCK_GUARDRAIL_ID"
 GUARDRAIL_VERSION_ENV = "MODHUB_BEDROCK_GUARDRAIL_VERSION"
+GUARDRAIL_OPTIONAL_ENV = "MODHUB_GUARDRAIL_OPTIONAL"
+
+
+class GuardrailNotConfiguredError(Exception):
+    """No guardrail id, and no explicit opt-out. Fails the phase rather
+    than running a Layer-2 control that silently is not there."""
 
 
 class UntrustedContentBlocked(Exception):
@@ -41,9 +47,25 @@ class Guardrail:
 
     @classmethod
     def from_env(cls, *, client: Any = None, region_name: str | None = None) -> Guardrail | None:
+        """Absent configuration is a failure, not a mode.
+
+        Returning None when the variable is missing made Layer 2 disappear
+        without a trace: `screened()` skipped the filter and every run
+        looked normal. Invariant #9 puts Guardrails in front of untrusted
+        content, so a deployment that lost the variable is misconfigured
+        and must say so -- unless it opted out explicitly, which is what
+        the local env does, since Guardrails is a Bedrock control-plane
+        API the emulator does not provide."""
+
+        if os.environ.get(GUARDRAIL_OPTIONAL_ENV, "").lower() in ("1", "true", "yes"):
+            return None
+
         guardrail_id = os.environ.get(GUARDRAIL_ID_ENV)
         if not guardrail_id:
-            return None
+            raise GuardrailNotConfiguredError(
+                f"{GUARDRAIL_ID_ENV} is not set. Set it, or set "
+                f"{GUARDRAIL_OPTIONAL_ENV}=true to run without the prompt-attack filter."
+            )
         version = os.environ.get(GUARDRAIL_VERSION_ENV) or "DRAFT"
         return cls(guardrail_id, version, client=client, region_name=region_name)
 

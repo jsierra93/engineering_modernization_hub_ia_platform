@@ -177,10 +177,17 @@ resource "aws_lambda_function" "agent_phase" {
       var.code_model_id == null ? {} : {
         BEDROCK_MODEL_CODE = var.code_model_id
       },
+      # agent_phase now refuses to run without a guardrail unless the
+      # opt-out is explicit: a missing variable used to remove Layer 2 in
+      # silence. Where no guardrail is created (envs/local -- Guardrails is
+      # a Bedrock control-plane API the emulator does not provide), say so
+      # out loud instead of letting the absence pass for a configuration.
       var.create_guardrail ? {
         MODHUB_BEDROCK_GUARDRAIL_ID      = local.guardrail_id
         MODHUB_BEDROCK_GUARDRAIL_VERSION = local.guardrail_version
-      } : {},
+      } : {
+        MODHUB_GUARDRAIL_OPTIONAL = "true"
+      },
       var.extra_environment_variables
     )
   }

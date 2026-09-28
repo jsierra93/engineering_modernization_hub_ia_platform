@@ -59,6 +59,12 @@ variable "sandbox_security_group_ids" {
   type        = list(string)
 }
 
+variable "sandbox_task_timeout_seconds" {
+  description = "Wall-clock cap on one sandbox task. Without it an ecs:runTask.sync state has no bound of its own and a hung container holds the run open until the service's own limits apply. Generous on purpose: it is a stuck-task backstop, not a performance budget -- max_minutes is what bounds the work."
+  type        = number
+  default     = 1800 # 30 min
+}
+
 variable "approval_timeout_seconds" {
   description = "How long AwaitApproval waits for a human before the run stops. Step Functions' own default for a waitForTaskToken state is one year, which leaves the run's task token live and the run sitting in AWAITING_APPROVAL indefinitely. This is platform policy, not a per-run limit: the requester's max_minutes deliberately excludes approval wait, because it bounds the work and not the deliberation."
   type        = number
