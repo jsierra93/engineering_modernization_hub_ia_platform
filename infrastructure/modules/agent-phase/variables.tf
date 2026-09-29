@@ -37,7 +37,7 @@ variable "fetch_doc_lambda_name" {
 }
 
 variable "create_guardrail" {
-  description = "Task 3.7-tf: create a real Bedrock Guardrail (prompt-attack filter, CLAUDE.md's Layer-1 defense backstop) and wire it into this Lambda. Default true for real AWS. infrastructure/envs/local sets this false -- Bedrock Guardrails are a control-plane API (creating/managing a guardrail resource), a different surface than bedrock-runtime's InvokeModel, and support on Floci is unconfirmed; skipping it locally keeps the rest of this module (and everything downstream) testable without depending on that unknown."
+  description = "Task 3.7-tf: create a real Bedrock Guardrail (prompt-attack filter, CLAUDE.md's Layer-1 defense backstop) and wire it into this Lambda. True for production deployments."
   type        = bool
   default     = true
 }
@@ -58,7 +58,7 @@ variable "lambda_runtime" {
 }
 
 variable "lambda_architectures" {
-  description = "arm64 (Graviton2) default for real AWS; infrastructure/envs/local overrides to x86_64 -- Floci does not cross-emulate arm64."
+  description = "Lambda CPU architecture. arm64 (Graviton2) is the default for production AWS deployments."
   type        = list(string)
   default     = ["arm64"]
 }

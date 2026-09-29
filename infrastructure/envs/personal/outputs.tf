@@ -19,6 +19,11 @@ output "api_endpoint" {
   value       = module.api.api_endpoint
 }
 
+output "cognito_user_pool_id" {
+  description = "Cognito user pool ID for token generation"
+  value       = module.identity.user_pool_id
+}
+
 output "cognito_issuer_url" {
   value = module.identity.issuer_url
 }

@@ -18,7 +18,7 @@ variable "lambda_runtime" {
 }
 
 variable "lambda_architectures" {
-  description = "arm64 (Graviton2) default for real AWS; infrastructure/envs/local overrides to x86_64 -- Floci does not cross-emulate arm64."
+  description = "Lambda CPU architecture. arm64 (Graviton2) is the default for production AWS deployments."
   type        = list(string)
   default     = ["arm64"]
 }

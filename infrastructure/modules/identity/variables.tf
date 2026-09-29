@@ -38,7 +38,7 @@ variable "test_usernames" {
     criterion of a manual login.
   EOT
   type        = list(string)
-  default     = ["demo-requester@example.com"]
+  default     = ["jsierra93@hotmail.com"]
 }
 
 variable "mfa_configuration" {
@@ -59,17 +59,8 @@ variable "mfa_configuration" {
 variable "issuer_base_url" {
   description = <<-EOT
     Overrides the hostname portion of the JWT `iss` claim / OIDC issuer.
-    Real AWS always issues `https://cognito-idp.<region>.amazonaws.com/<pool_id>`
-    regardless of this value (that hostname is intrinsic to Cognito, not
-    configurable) -- this variable exists only because Floci's own Cognito
-    emulation issues tokens with `iss` set to Floci's OWN endpoint instead
-    (confirmed empirically, 2026-09-26: a real AdminInitiateAuth call
-    against Floci returned `"iss": "http://localhost:4566/<pool_id>"`, not
-    the AWS hostname). Leave null for envs/personal (real AWS); set to
-    `var.floci_endpoint` for envs/local so the `issuer_url` output matches
-    what Floci-issued tokens actually carry, letting api's JWT authorizer
-    (task 4.2-tf) validate real local tokens instead of rejecting them for
-    an issuer mismatch.
+    Real AWS always issues `https://cognito-idp.<region>.amazonaws.com/<pool_id>`.
+    Leave null for production (real AWS).
   EOT
   type        = string
   default     = null

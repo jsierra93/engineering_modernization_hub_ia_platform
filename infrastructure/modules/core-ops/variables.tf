@@ -68,7 +68,7 @@ variable "lambda_runtime" {
 }
 
 variable "lambda_architectures" {
-  description = "Lambda instruction set. arm64 (Graviton2) for real AWS, same cost rationale as the sandbox Fargate task and the api Lambda. infrastructure/envs/local overrides this to x86_64 -- Floci does not cross-emulate arm64."
+  description = "Lambda instruction set. arm64 (Graviton2) is the default for production AWS deployments."
   type        = list(string)
   default     = ["arm64"]
 }
@@ -80,7 +80,7 @@ variable "lambda_handler" {
 }
 
 variable "extra_environment_variables" {
-  description = "Additional Lambda environment variables merged on top of this module's own. Used by envs/local to point the bundled boto3 clients at Floci."
+  description = "Additional Lambda environment variables merged on top of this module's own."
   type        = map(string)
   default     = {}
 }

@@ -6,18 +6,6 @@
 # authorization-code flow), and a handful of test users. Feeds the JWT
 # authorizer wired into the api module (task 4.2-tf) via this module's
 # issuer_url/client-id outputs.
-#
-# Wired into infrastructure/envs/local too, and empirically confirmed
-# end-to-end, 2026-09-26: Floci's own service list (floci.io/aws) marks
-# Cognito as one of the services exclusive to Floci among free AWS
-# emulators, and a real AdminInitiateAuth login against it produced a
-# real, verifiable JWT. That JWT was then sent to the real API Gateway
-# HTTP API + Lambda (also through Floci) with api's JWT authorizer
-# enabled: no Authorization header -> 401, a garbage bearer token -> 401,
-# the real Cognito-issued token -> 200. One catch worth keeping in mind:
-# Floci issues tokens with `iss` set to Floci's OWN endpoint
-# (http://localhost:4566/<pool_id>), not the real AWS hostname -- see
-# var.issuer_base_url's own comment for how envs/local accounts for that.
 
 resource "aws_cognito_user_pool" "users" {
   name = "${var.name_prefix}-users"

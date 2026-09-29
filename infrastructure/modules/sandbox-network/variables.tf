@@ -48,12 +48,7 @@ variable "sandbox_memory" {
 variable "sandbox_architecture" {
   description = <<-EOT
     CPU architecture for the sandbox Fargate task. arm64 (Graviton) is the
-    real-AWS default for the same price-performance reason as the api
-    Lambda module. Floci does not cross-emulate arm64 (confirmed
-    empirically for Lambda, same underlying Docker-host constraint applies
-    to any container Floci runs) -- infrastructure/envs/local overrides
-    this to "x86_64", exactly like it already does for the api module's
-    lambda_architectures.
+    default for production AWS deployments for price-performance reasons.
   EOT
   type        = string
   default     = "arm64"

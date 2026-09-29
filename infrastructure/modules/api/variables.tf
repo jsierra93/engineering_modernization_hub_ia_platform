@@ -88,7 +88,7 @@ variable "workspaces_bucket_arn" {
 }
 
 variable "extra_environment_variables" {
-  description = "Additional Lambda environment variables merged on top of the module's own (RUNS_TABLE_NAME, MODHUB_STATE_MACHINE_ARN). Used by envs/local to point the bundled boto3 clients at a local emulator endpoint (AWS_ENDPOINT_URL) - never needed against real AWS."
+  description = "Additional Lambda environment variables merged on top of the module's own (RUNS_TABLE_NAME, MODHUB_STATE_MACHINE_ARN)."
   type        = map(string)
   default     = {}
 }
@@ -130,13 +130,7 @@ variable "analysis_model_id" {
 }
 
 variable "enable_jwt_authorizer" {
-  description = <<-EOT
-    Task 4.2-tf: require a valid Cognito JWT on every route. False in
-    envs/local (Cognito's control-plane support on Floci is unconfirmed,
-    same reasoning as agent-phase's create_guardrail) -- local testing
-    keeps using handler.py's x-requested-by header fallback instead. True
-    in envs/personal, backed by the identity module's real user pool.
-  EOT
+  description = "Task 4.2-tf: require a valid Cognito JWT on every route. False for development, true for production backed by real Cognito."
   type    = bool
   default = false
 }
