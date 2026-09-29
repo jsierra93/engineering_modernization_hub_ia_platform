@@ -80,7 +80,7 @@ sys.stdout.reconfigure(newline=chr(10))
 S = json.load(sys.stdin)["States"]
 # The states the demo actually walks through, plus the controls added late
 # that have the least mileage on them.
-needed = ["BaselineLint", "CheckViability", "Lint", "CheckBaselineLint",
+needed = ["BaselineLint", "CheckViability", "Lint", "MarkBaselineLintClean", "RecordStuckRun", "ExecutionFailed",
           "IncrementIteration", "ApplyIteration", "RecordApprovalTimeout"]
 missing = [n for n in needed if n not in S]
 print("MISSING:" + ",".join(missing) if missing else "ALLPRESENT")
