@@ -16,6 +16,8 @@ import boto3
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
+from core_py.constants import WORKSPACE_BUCKET_ENV
+from core_py.limits import LIMIT_FIELDS, LimitsConfigurationError, LimitsRequestError, platform_ceiling, resolve_limits
 from core_py.models import Restricciones, Run, RunStatus
 from core_py.observability import log_event
 from core_py.persistence import ApprovalConflictError, EventsTable, RunsTable
@@ -24,7 +26,6 @@ from api.resolver import NoStrategyMatchError, ResolverUnavailableError, resolve
 from api.strategy_lookup import list_strategy_manifests
 
 STATE_MACHINE_ARN_ENV = "MODHUB_STATE_MACHINE_ARN"
-WORKSPACE_BUCKET_ENV = "MODHUB_WORKSPACE_BUCKET"
 
 APPROVAL_MAX_AUTH_AGE_SECONDS_ENV = "MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS"
 
@@ -33,7 +34,6 @@ DEV_STRATEGY_ID_ENV = "MODHUB_DEV_STRATEGY_ID"
 REPO_ALLOWLIST_ENV = "MODHUB_REPO_ALLOWLIST"
 DEFAULT_APPROVAL_MAX_AUTH_AGE_SECONDS = 300
 
-LIMIT_FIELDS = ("max_usd", "max_iterations", "max_minutes")
 
 
 def _repo_is_allowed(repo: str, allowlist: list[str]) -> bool:
@@ -187,14 +187,18 @@ def create_run(
                 422, "INVALID_LIMIT", f"{field} must be greater than zero.", None
             )
 
-        limit_max = getattr(manifest.limits, field).max
-        if value > limit_max:
-            return _error_response(
-                422,
-                "LIMIT_EXCEEDS_STRATEGY_MAX",
-                f"requested {field}={value} exceeds strategy {manifest.id}'s max of {limit_max}.",
-                None,
-            )
+    try:
+        resolve_limits({field: body[field] for field in LIMIT_FIELDS}, manifest.limits, platform_ceiling().as_dict())
+    except LimitsRequestError as exc:
+        return _error_response(
+            422,
+            "LIMIT_EXCEEDS_STRATEGY_MAX",
+            f"requested {exc.field}={exc.requested} exceeds strategy {manifest.id}'s max of {exc.maximum}.",
+            None,
+        )
+    except LimitsConfigurationError as exc:
+        log_event("api.strategy_limits_misconfigured", strategy_id=manifest.id, error=str(exc)[:300], trace_id=trace_id)
+        return _error_response(500, "STRATEGY_MISCONFIGURED", "The resolved strategy declares limits above the platform ceiling.", None)
 
     try:
         run = Run(

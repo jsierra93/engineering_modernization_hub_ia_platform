@@ -6,7 +6,7 @@ import io
 import tarfile
 from typing import Any
 
-PRESIGNED_URL_TTL_SECONDS = 1800
+from core_py.constants import BASELINE_VERSION, PRESIGNED_URL_TTL_SECONDS
 
 
 def repackage_workspace_for_sandbox(
@@ -15,7 +15,7 @@ def repackage_workspace_for_sandbox(
     run_id: str,
     *,
     junit_filename: str,
-    version: str = "v0",
+    version: str = BASELINE_VERSION,
 ) -> dict[str, str]:
     bucket_resource = s3_resource.Bucket(bucket)
     prefix = f"ws/{run_id}/{version}/"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core_py.constants import BASELINE_VERSION
 from core_py.scope import normalize
 
 from typing import Any, Protocol
@@ -21,7 +22,7 @@ class Workspace(Protocol):
 
 
 class S3Workspace:
-    def __init__(self, s3_resource: Any, bucket: str, run_id: str, version: str = "v0") -> None:
+    def __init__(self, s3_resource: Any, bucket: str, run_id: str, version: str = BASELINE_VERSION) -> None:
         self._bucket = s3_resource.Bucket(bucket)
         self._prefix = f"ws/{run_id}/{version}/"
 

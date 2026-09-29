@@ -169,6 +169,7 @@ def _compute_verdict(
             log_event("core_ops.diff_failed", run_id=run_id, error=str(exc)[:300])
 
     escaped: list[str] = []
+    scope_unverified = False
     if run.changed_paths:
         try:
             manifest = get_strategy_manifest(run.strategy_id)
@@ -180,16 +181,17 @@ def _compute_verdict(
             escaped = [p for p in run.changed_paths if not scope.allows(p)]
         except Exception as exc:  # noqa: BLE001
             log_event("core_ops.scope_check_failed", run_id=run_id, error=str(exc)[:300])
+            escaped = list(run.changed_paths)
+            scope_unverified = True
 
     if escaped:
-        log_event("core_ops.diff_escaped_scope", run_id=run_id, paths=escaped)
+        log_event("core_ops.diff_escaped_scope", run_id=run_id, paths=escaped, unverified=scope_unverified)
+        reason = "scope could not be verified" if scope_unverified else "changed path outside approved scope"
         _persist_denials(
             str(run_id),
-            [{"tool_name": "diff", "reason": "changed path outside approved scope", "attempted_path": p}
-             for p in escaped],
+            [{"tool_name": "diff", "reason": reason, "attempted_path": p} for p in escaped],
             events_table,
         )
-
 
     elapsed_minutes = (
         (datetime.now(UTC) - run.created_at).total_seconds() - run.approval_wait_seconds

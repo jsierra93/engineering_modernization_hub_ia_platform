@@ -9,6 +9,7 @@ import os
 from typing import Any
 
 from core_py import ModelRole, estimate_cost_usd, log_event, resolve_scope
+from core_py.constants import BASELINE_VERSION, WORKING_VERSION, WORKSPACE_BUCKET_ENV
 
 from agent_phase.agent_builder import build_agent
 from agent_phase.fetch_doc_client import make_fetch_doc_fn
@@ -18,10 +19,7 @@ from agent_phase.sandbox_handoff import copy_version, repackage_workspace_for_sa
 from agent_phase.strategy_lookup import get_strategy_manifest
 from agent_phase.workspace import S3Workspace
 
-WORKSPACE_BUCKET_ENV = "MODHUB_WORKSPACE_BUCKET"
 FETCH_DOC_FUNCTION_NAME_ENV = "MODHUB_FETCH_DOC_FUNCTION_NAME"
-BASELINE_VERSION = "v0"
-WORKING_VERSION = "v1"
 
 
 class UnknownPhaseError(Exception):

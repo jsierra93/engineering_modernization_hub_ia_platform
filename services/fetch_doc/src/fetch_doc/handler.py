@@ -7,13 +7,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from fetch_doc.allowlist import is_allowed_host
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 REQUEST_TIMEOUT_SECONDS = 15
+MAX_REDIRECTS = 3
 
 MAX_TEXT_CHARS = 20_000
 
@@ -102,16 +103,47 @@ def _validate_url(url: str) -> str:
     return host
 
 
-def fetch_document(url: str, http_session: SupportsGet) -> DocumentResult:
+def _get_following_allowed_redirects(url: str, http_session: SupportsGet) -> tuple[Any, str, str]:
     host = _validate_url(url)
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            response = http_session.get(
+                url, timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=False, stream=True
+            )
+            status = getattr(response, "status_code", 200)
+            location = response.headers.get("Location") if 300 <= status < 400 else None
+            if location is None:
+                response.raise_for_status()
+        except FetchDocError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - re-raised as our own type
+            raise HttpGetError(f"failed to fetch {url}: {exc}") from exc
+        if location is None:
+            return response, url, host
+        response.close()
+        url = urljoin(url, location)
+        host = _validate_url(url)
+    raise HttpGetError(f"too many redirects fetching {url}")
 
-    try:
-        response = http_session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
-        response.raise_for_status()
-    except FetchDocError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - re-raised as our own type
-        raise HttpGetError(f"failed to fetch {url}: {exc}") from exc
+
+def _read_capped(response: Any, url: str) -> bytes:
+    if not hasattr(response, "iter_content"):
+        return response.content
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=65536):
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            response.close()
+            raise ResponseTooLargeError(
+                f"rejected {url!r}: response body exceeds the {MAX_RESPONSE_BYTES}-byte limit"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def fetch_document(url: str, http_session: SupportsGet) -> DocumentResult:
+    response, url, host = _get_following_allowed_redirects(url, http_session)
 
     content_length = response.headers.get("Content-Length") if hasattr(response, "headers") else None
     if content_length is not None:
@@ -124,12 +156,7 @@ def fetch_document(url: str, http_session: SupportsGet) -> DocumentResult:
         except ValueError:
             pass
 
-    body = response.content
-    if len(body) > MAX_RESPONSE_BYTES:
-        raise ResponseTooLargeError(
-            f"rejected {url!r}: response body of {len(body)} bytes exceeds "
-            f"the {MAX_RESPONSE_BYTES}-byte limit"
-        )
+    body = _read_capped(response, url)
 
     encoding = getattr(response, "encoding", None) or "utf-8"
     try:

@@ -2,20 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from core_py.limits import LIMIT_FIELDS, PlatformCeiling, platform_ceiling
 from core_py.models import StrategyManifest
 
-
-@dataclass(frozen=True)
-class PlatformCeiling:
-    max_usd: float
-    max_iterations: int
-    max_minutes: int
-
-
-PLATFORM_CEILING = PlatformCeiling(max_usd=10.0, max_iterations=5, max_minutes=60)
+PLATFORM_CEILING = platform_ceiling()
 
 
 class ManifestValidationError(ValueError):
@@ -25,9 +17,6 @@ class ManifestValidationError(ValueError):
 @runtime_checkable
 class StrategyModule(Protocol):
     def manifest(self) -> StrategyManifest: ...
-
-
-_LIMIT_FIELDS = ("max_usd", "max_iterations", "max_minutes")
 
 
 def _validate_inputs_schema(inputs: dict[str, Any]) -> list[str]:
@@ -55,12 +44,8 @@ def validate_manifest(
 
     errors.extend(_validate_inputs_schema(manifest.inputs))
 
-    ceiling_values = {
-        "max_usd": ceiling.max_usd,
-        "max_iterations": ceiling.max_iterations,
-        "max_minutes": ceiling.max_minutes,
-    }
-    for field in _LIMIT_FIELDS:
+    ceiling_values = ceiling.as_dict()
+    for field in LIMIT_FIELDS:
         limit = getattr(manifest.limits, field)
         ceiling_value = ceiling_values[field]
         if limit.max > ceiling_value:

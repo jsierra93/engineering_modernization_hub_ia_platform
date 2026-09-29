@@ -8,10 +8,10 @@ import json
 import os
 from typing import Any
 
+from core_py.constants import WORKING_VERSION, WORKSPACE_BUCKET_ENV
+
 GITHUB_API = "https://api.github.com"
 GITHUB_TOKEN_SECRET_ARN_ENV = "GITHUB_TOKEN_SECRET_ARN"
-WORKSPACE_BUCKET_ENV = "MODHUB_WORKSPACE_BUCKET"
-WORKING_VERSION = "v1"
 
 PUBLISHABLE_STATES = {"LISTO_PARA_REVISION", "COMPLETADO_PARCIALMENTE"}
 
@@ -139,6 +139,12 @@ def open_pull_request(
 
     run_data = run.model_dump(mode="json")
 
+    if _requested_by(event) != run_data["requested_by"]:
+        return _response(
+            403,
+            {"code": "NOT_REQUESTER", "message": "Only the requester can publish this run.", "run_id": run_id},
+        )
+
     if run_data.get("pull_request_url"):
         return _response(
             200,
@@ -158,13 +164,6 @@ def open_pull_request(
                 "message": f"A run in {run_data['status']} has nothing to publish.",
                 "run_id": run_id,
             },
-        )
-
-    requester = _requested_by(event)
-    if requester != run_data["requested_by"]:
-        return _response(
-            403,
-            {"code": "NOT_REQUESTER", "message": "Only the requester can publish this run.", "run_id": run_id},
         )
 
     changed = run_data.get("changed_paths") or []

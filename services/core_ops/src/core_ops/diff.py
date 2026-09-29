@@ -5,6 +5,8 @@ from __future__ import annotations
 import difflib
 from typing import Any
 
+from core_py.constants import BASELINE_VERSION, WORKING_VERSION
+
 MAX_DIFF_CHARS = 200_000
 
 
@@ -27,8 +29,8 @@ def compute_diff(
     s3_resource: Any,
     bucket: str,
     run_id: str,
-    baseline_version: str = "v0",
-    working_version: str = "v1",
+    baseline_version: str = BASELINE_VERSION,
+    working_version: str = WORKING_VERSION,
 ) -> tuple[str, list[str]]:
     before = _read_version(s3_resource, bucket, run_id, baseline_version)
     after = _read_version(s3_resource, bucket, run_id, working_version)

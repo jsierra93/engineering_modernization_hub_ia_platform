@@ -9,11 +9,11 @@ import tarfile
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from core_py.constants import BASELINE_VERSION, PRESIGNED_URL_TTL_SECONDS
+from core_py.constants import WORKSPACE_BUCKET_ENV as DEFAULT_WORKSPACE_BUCKET_ENV
+
 from fetch_repo.sanitize import TarSanitizationError, iter_sanitized_members
 
-DEFAULT_WORKSPACE_BUCKET_ENV = "MODHUB_WORKSPACE_BUCKET"
-
-PRESIGNED_URL_TTL_SECONDS = 1800
 
 
 class HttpGetError(Exception):
@@ -57,7 +57,7 @@ def fetch_and_store_repo(
     http_session: SupportsGet,
     s3_resource: Any,
     *,
-    version: str = "v0",
+    version: str = BASELINE_VERSION,
 ) -> FetchResult:
     url = _tarball_url(repo, commit)
     try:

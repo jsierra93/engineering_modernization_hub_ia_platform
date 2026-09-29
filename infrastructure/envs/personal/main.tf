@@ -3,6 +3,12 @@
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 
+  platform_ceiling_env = {
+    MODHUB_CEILING_MAX_USD        = "10"
+    MODHUB_CEILING_MAX_ITERATIONS = "5"
+    MODHUB_CEILING_MAX_MINUTES    = "60"
+  }
+
   api_package_path         = "${path.module}/../../scripts/build/api_lambda_x86_64.zip"
   fetch_repo_package_path  = "${path.module}/../../scripts/build/fetch_repo_lambda_x86_64.zip"
   core_ops_package_path    = "${path.module}/../../scripts/build/core_ops_lambda_x86_64.zip"
@@ -95,9 +101,9 @@ module "api" {
   open_pr_lambda_invoke_arn    = module.open_pr.lambda_invoke_arn
   open_pr_lambda_function_name = module.open_pr.lambda_function_name
 
-  extra_environment_variables = {
+  extra_environment_variables = merge(local.platform_ceiling_env, {
     MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS = "3600"
-  }
+  })
 
   enable_jwt_authorizer = true
   jwt_issuer            = module.identity.issuer_url
@@ -141,6 +147,8 @@ module "core_ops" {
   workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
   lambda_package_zip_path = local.core_ops_package_path
   lambda_architectures    = local.lambda_architectures
+
+  extra_environment_variables = local.platform_ceiling_env
 }
 
 module "fetch_doc" {
@@ -166,6 +174,8 @@ module "agent_phase" {
   code_model_id           = local.code_model_id
   lambda_package_zip_path = local.agent_phase_package_path
   lambda_architectures    = local.lambda_architectures
+
+  extra_environment_variables = local.platform_ceiling_env
 
   enable_invocation_logging = true
 }
