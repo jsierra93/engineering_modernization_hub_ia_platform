@@ -893,10 +893,14 @@ components:
         blocking:
           type: boolean
           default: true
+        baseline:
+          type: string
+          enum: [must_pass, must_fail, informational]
+          description: What the check must do on the untouched repo. Defaults to must_pass when blocking and informational otherwise.
 
     StrategyManifest:
       type: object
-      required: [id, version, title, checks, writable_paths, sources, limits, inputs]
+      required: [id, version, title, description, ecosystem, checks, writable_paths, sources, limits, inputs]
       properties:
         id:
           type: string
@@ -904,6 +908,11 @@ components:
           type: string
         title:
           type: string
+        description:
+          type: string
+        ecosystem:
+          type: string
+          description: Lowercase language or ecosystem the strategy applies to, such as python.
         inputs:
           type: object
           description: JSON-schema-like description of the strategy's own inputs.

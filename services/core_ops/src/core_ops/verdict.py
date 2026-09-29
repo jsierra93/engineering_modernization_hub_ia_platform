@@ -31,6 +31,7 @@ class VerdictInputs:
     budget: BudgetStatus
 
     baseline_failed: bool = False
+    nothing_to_remediate: bool = False
     agent_concluded_infeasible: bool = False
 
     fix_iterations_exhausted_without_pass: bool = False
@@ -69,6 +70,8 @@ def evaluate_verdict_with_reason(inputs: VerdictInputs) -> tuple[RunStatus, str]
 
     if inputs.baseline_failed:
         return RunStatus.BLOQUEADO, "BASELINE_FAILING"
+    if inputs.nothing_to_remediate:
+        return RunStatus.BLOQUEADO, "NOTHING_TO_REMEDIATE"
     if inputs.agent_concluded_infeasible:
         return RunStatus.BLOQUEADO, "INFEASIBLE"
 

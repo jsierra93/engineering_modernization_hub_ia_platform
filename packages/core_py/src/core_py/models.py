@@ -7,9 +7,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def _utcnow() -> datetime:
@@ -105,6 +105,13 @@ class CheckSpec(BaseModel):
 
     name: str
     blocking: bool = True
+    baseline: Literal["must_pass", "must_fail", "informational"] | None = None
+
+    @model_validator(mode="after")
+    def _default_baseline(self) -> CheckSpec:
+        if self.baseline is None:
+            self.baseline = "must_pass" if self.blocking else "informational"
+        return self
 
 
 class StrategyManifest(BaseModel):
@@ -113,6 +120,8 @@ class StrategyManifest(BaseModel):
     id: str
     version: str
     title: str
+    description: str
+    ecosystem: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     limits: StrategyLimits
     checks: list[CheckSpec]

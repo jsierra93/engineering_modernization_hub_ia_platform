@@ -65,7 +65,10 @@ def resolve_strategy(
 
     resolved_model_id = resolve_model_id(ModelRole.ANALYSIS, override=model_id)
     by_id = {manifest.id: manifest for manifest in candidates}
-    catalog = [{"id": manifest.id, "title": manifest.title} for manifest in candidates]
+    catalog = [
+        {"id": manifest.id, "title": manifest.title, "description": manifest.description, "ecosystem": manifest.ecosystem}
+        for manifest in candidates
+    ]
 
     user_message = json.dumps({"objetivo": objetivo, "candidates": catalog})
 

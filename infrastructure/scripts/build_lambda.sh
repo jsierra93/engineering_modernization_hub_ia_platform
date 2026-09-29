@@ -27,6 +27,13 @@ case "${ARCH}" in
   *) echo "error: unsupported arch '${ARCH}' -- use arm64 or x86_64" >&2; exit 1 ;;
 esac
 
+STRATEGY_PACKAGES=()
+for strategy_dir in "${REPO_ROOT}"/strategies/*/src/*/; do
+  if [ -f "${strategy_dir}strategy.marker" ]; then
+    STRATEGY_PACKAGES+=("${strategy_dir%/}:$(basename "${strategy_dir}")")
+  fi
+done
+
 case "${SERVICE}" in
   api)
     SERVICE_SRC="${REPO_ROOT}/services/api/src/api"
@@ -34,7 +41,7 @@ case "${SERVICE}" in
     WORKSPACE_PACKAGES=(
       "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
-      "${REPO_ROOT}/strategies/python_pydantic_v2/src/python_pydantic_v2:python_pydantic_v2"
+      "${STRATEGY_PACKAGES[@]}"
     )
     THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34")
     ;;
@@ -50,7 +57,7 @@ case "${SERVICE}" in
     WORKSPACE_PACKAGES=(
       "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
-      "${REPO_ROOT}/strategies/python_pydantic_v2/src/python_pydantic_v2:python_pydantic_v2"
+      "${STRATEGY_PACKAGES[@]}"
     )
     THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34")
     ;;
@@ -66,7 +73,7 @@ case "${SERVICE}" in
     WORKSPACE_PACKAGES=(
       "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
-      "${REPO_ROOT}/strategies/python_pydantic_v2/src/python_pydantic_v2:python_pydantic_v2"
+      "${STRATEGY_PACKAGES[@]}"
     )
     THIRD_PARTY_DEPS=("strands-agents==1.57.1" "pydantic>=2.7" "boto3>=1.34")
     ;;

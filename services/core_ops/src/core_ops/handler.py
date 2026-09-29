@@ -12,7 +12,7 @@ from core_py.observability import log_event
 from core_py.scope import resolve_scope
 from core_py.persistence import EventsTable, RunsTable
 
-from core_ops.checks import FALLBACK_CHECKS, blocking_names, checks_from_evidence
+from core_ops.checks import FALLBACK_CHECKS, blocking_names, checks_from_evidence, nothing_to_remediate
 from core_ops.diff import compute_diff
 from core_ops.strategy_lookup import get_strategy_manifest
 from core_ops.plan_hash import compute_plan_hash
@@ -196,6 +196,7 @@ def _verdict_inputs(
             max_iterations=run.max_iterations,
         ),
         baseline_failed=event.get("baseline_failed", False),
+        nothing_to_remediate=nothing_to_remediate(specs, event.get("baseline_clean")),
         agent_concluded_infeasible=event.get("agent_concluded_infeasible", False),
         fix_iterations_exhausted_without_pass=event.get("fix_iterations_exhausted_without_pass", False),
         unrecoverable_error=event.get("unrecoverable_error", False),

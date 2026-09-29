@@ -38,6 +38,11 @@ def blocking_names(specs: Iterable[CheckSpec]) -> tuple[str, ...]:
     return tuple(spec.name for spec in specs if spec.blocking)
 
 
+def nothing_to_remediate(specs: Iterable[CheckSpec], baseline_clean: dict[str, bool] | None) -> bool:
+    baseline_clean = baseline_clean or {}
+    return any(spec.baseline == "must_fail" and baseline_clean.get(spec.name) is True for spec in specs)
+
+
 def checks_from_evidence(
     evidence: dict[str, Any], specs: Iterable[CheckSpec], baseline_clean: dict[str, bool] | None
 ) -> dict[str, bool]:

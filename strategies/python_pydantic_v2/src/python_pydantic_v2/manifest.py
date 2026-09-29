@@ -49,6 +49,8 @@ def manifest() -> StrategyManifest:
         id="python-pydantic-v2",
         version="1.0.0",
         title="Pydantic v1 -> v2",
+        description="Migrates a Python project from Pydantic v1 to v2 following the official migration guide.",
+        ecosystem="python",
         inputs=_INPUTS,
         limits=_LIMITS,
         checks=_CHECKS,

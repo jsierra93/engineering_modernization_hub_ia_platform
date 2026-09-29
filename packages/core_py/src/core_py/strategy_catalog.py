@@ -1,5 +1,5 @@
 """The one place the strategy catalog is assembled; every service reads it from here.
-Adding a strategy means registering it in build_registry and nowhere else.
+Strategies are discovered by their strategy.marker file, so adding one needs no edit here.
 """
 
 from __future__ import annotations
@@ -9,11 +9,12 @@ from core_py.models import StrategyManifest
 
 
 def build_registry():
-    import python_pydantic_v2
+    from strategies_sdk.discovery import discover_strategy_modules
     from strategies_sdk.registry import StrategyRegistry
 
     registry = StrategyRegistry(ceiling=platform_ceiling())
-    registry.register(python_pydantic_v2)
+    for module in discover_strategy_modules():
+        registry.register(module)
     return registry
 
 

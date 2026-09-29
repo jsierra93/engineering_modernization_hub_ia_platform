@@ -48,6 +48,11 @@ def _validate_checks(manifest: StrategyManifest) -> list[str]:
         errors.append("checks must not repeat a name")
     if not any(check.blocking for check in manifest.checks):
         errors.append("checks must declare at least one blocking check")
+    for check in manifest.checks:
+        if check.blocking and check.baseline == "informational":
+            errors.append(f"checks.{check.name} is blocking, so its baseline must be must_pass or must_fail")
+        if not check.blocking and check.baseline != "informational":
+            errors.append(f"checks.{check.name} is non-blocking, so its baseline must be informational")
     return errors
 
 
@@ -75,6 +80,10 @@ def validate_manifest(
             )
 
     errors.extend(_validate_checks(manifest))
+    if not manifest.description.strip():
+        errors.append("description must say what the strategy does, in one sentence")
+    if not manifest.ecosystem.strip() or manifest.ecosystem != manifest.ecosystem.lower():
+        errors.append("ecosystem must be a non-empty lowercase name such as \"python\"")
     if not manifest.writable_paths:
         errors.append("writable_paths must declare at least one path")
     if not manifest.sources:
