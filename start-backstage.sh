@@ -14,7 +14,7 @@ set -euo pipefail
 TARGET="${1:-}"
 TF="${TERRAFORM_BIN:-terraform}"
 TEST_USERNAME="${MODHUB_TEST_USERNAME:-jsierra93@hotmail.com}"
-TEST_PASSWORD="${MODHUB_TEST_PASSWORD:-PassW0rd123!}"
+TEST_PASSWORD="${MODHUB_TEST_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(18) + "aA1!")')}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -29,7 +29,7 @@ case "${TARGET}" in
     export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
     ;;
   personal)
-    ENV_DIR="infrastructure/envs/personal"
+    ENV_DIR="infrastructure/envs"
     COGNITO_ENDPOINT=""
     COGNITO_REGION="us-east-2"
     export AWS_PROFILE="${AWS_PROFILE:-personal}"

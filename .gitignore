@@ -224,3 +224,4 @@ tfplan.out
 *.lock.hcl
 !README.md
 *.md
+infrastructure/envs/*.auto.tfvars
