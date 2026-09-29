@@ -75,7 +75,7 @@ export const ModernizacionesPage = () => {
   const [reportRunId, setReportRunId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const { lastSignal } = useSignal<{ event_type: string; run_id: string }>('modhub:runs');
+  const { lastSignal } = useSignal<{ event_type: string }>('modhub:runs');
 
   useEffect(() => {
     if (lastSignal) {

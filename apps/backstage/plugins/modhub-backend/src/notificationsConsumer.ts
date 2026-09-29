@@ -89,7 +89,7 @@ export class NotificationsConsumer {
         recipients: { type: 'broadcast' },
         payload: {
           title: 'Plan de modernización pendiente de aprobación',
-          description: `El run ${runId} espera tu revisión.`,
+          description: 'Hay un plan de modernización esperando revisión.',
           link: `/modhub`,
           topic: 'modhub',
           severity: 'normal',
@@ -100,7 +100,7 @@ export class NotificationsConsumer {
     await signals?.publish({
       recipients: { type: 'broadcast' },
       channel: MODHUB_SIGNAL_CHANNEL,
-      message: { event_type: payload.event_type ?? 'UNKNOWN', run_id: runId },
+      message: { event_type: payload.event_type ?? 'UNKNOWN' },
     });
 
     await this.client.send(

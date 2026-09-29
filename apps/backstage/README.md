@@ -6,7 +6,7 @@ modernization requests through Scaffolder templates and track progress
 against the `modhub/v1` API.
 
 This is a fully local development setup. For real API interaction, you need
-AWS infrastructure deployed (see `infrastructure/envs/personal/`).
+AWS infrastructure deployed (see `infrastructure/envs/`).
 
 ## What's here
 

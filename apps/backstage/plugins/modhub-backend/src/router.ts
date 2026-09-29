@@ -73,7 +73,7 @@ export async function createRouter(
   router.get('/runs/:runId', async (req, res) => {
     const traceId = (req as any).traceId;
     const upstream = await fetch(
-      `${modhubBaseUrl}/modhub/v1/runs/${req.params.runId}`,
+      `${modhubBaseUrl}/modhub/v1/runs/${encodeURIComponent(req.params.runId)}`,
       { headers: forwardedHeaders(req, devToken, traceId) },
     );
     const body = await upstream.text();
@@ -83,7 +83,7 @@ export async function createRouter(
   router.get('/runs/:runId/report', async (req, res) => {
     const traceId = (req as any).traceId;
     const upstream = await fetch(
-      `${modhubBaseUrl}/modhub/v1/runs/${req.params.runId}/report`,
+      `${modhubBaseUrl}/modhub/v1/runs/${encodeURIComponent(req.params.runId)}/report`,
       { headers: forwardedHeaders(req, devToken, traceId) },
     );
     const body = await upstream.text();
@@ -93,7 +93,7 @@ export async function createRouter(
   router.post('/runs/:runId/approval', async (req, res) => {
     const traceId = (req as any).traceId;
     const upstream = await fetch(
-      `${modhubBaseUrl}/modhub/v1/runs/${req.params.runId}/approval`,
+      `${modhubBaseUrl}/modhub/v1/runs/${encodeURIComponent(req.params.runId)}/approval`,
       {
         method: 'POST',
         headers: forwardedHeaders(req, devToken, traceId),
@@ -107,7 +107,7 @@ export async function createRouter(
   router.post('/runs/:runId/pull-request', async (req, res) => {
     const traceId = (req as any).traceId;
     const upstream = await fetch(
-      `${modhubBaseUrl}/modhub/v1/runs/${req.params.runId}/pull-request`,
+      `${modhubBaseUrl}/modhub/v1/runs/${encodeURIComponent(req.params.runId)}/pull-request`,
       {
         method: 'POST',
         headers: forwardedHeaders(req, devToken, traceId),

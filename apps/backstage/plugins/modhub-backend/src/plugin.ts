@@ -42,7 +42,7 @@ export const modhubBackendPlugin = createBackendPlugin({
 
         const consumer = new NotificationsConsumer({
           queueUrl,
-          region: config.getOptionalString('modhub.awsRegion') ?? 'us-east-2',
+          region: config.getString('modhub.awsRegion'),
           logger,
           notifications,
           signals,
