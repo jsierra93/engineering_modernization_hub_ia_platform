@@ -12,8 +12,8 @@ set -euo pipefail
 
 TARGET="${1:-}"
 TF="${TERRAFORM_BIN:-terraform}"
-TEST_USERNAME="${MODHUB_TEST_USERNAME:-demo-requester@example.com}"
-TEST_PASSWORD="${MODHUB_TEST_PASSWORD:-Sup3rSecret!2026}"
+TEST_USERNAME="${MODHUB_TEST_USERNAME:-jsierra93@hotmail.com}"
+TEST_PASSWORD="${MODHUB_TEST_PASSWORD:-PassW0rd123!}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "error: $*" >&2; exit 1; }

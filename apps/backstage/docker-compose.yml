@@ -1,25 +1,20 @@
 # Container-only Backstage instance (dev mode: `pnpm start`, both frontend
 # dev server on :3000 and backend on :7007) -- deliberately, so nothing
 # depends on whatever Node/pnpm/corepack setup happens to exist on the
-# host machine (see packages/backend/Dockerfile's own header for the real,
-# reproduced Windows-host failures this sidesteps, 2026-09-26, and for why
-# this runs dev mode rather than a production bundle).
+# host machine.
 #
 # Datastore choice: SQLite (better-sqlite3), per app-config.yaml's default
-# `backend.database` block. This is a prototype/hiring-case-study repo, not
-# a production deployment — Postgres is unnecessary complexity for a
-# single-user local demo.
+# `backend.database` block. This is a prototype/demo repo, not
+# a production deployment — Postgres is unnecessary complexity for local development.
 #
-# Env vars (export these before `docker compose up`, from
-# infrastructure/envs/local's Terraform outputs -- start-local-env.sh does
-# this automatically for the non-container `pnpm start` path; set them by
-# hand here if you use this compose file instead):
-#   MODHUB_API_BASE_URL     terraform output -raw api_endpoint, converted
-#                           to Floci's local routing form (see
-#                           start-local-env.sh for the exact conversion)
-#   AUTH_OIDC_METADATA_URL  "${cognito_issuer_url}/.well-known/openid-configuration"
-#   AUTH_OIDC_CLIENT_ID     terraform output -raw cognito_backstage_client_id
-#   AUTH_OIDC_CLIENT_SECRET terraform output -raw cognito_backstage_client_secret
+# Required environment variables (export these before `docker compose up`):
+#   MODHUB_API_BASE_URL     API endpoint from AWS infrastructure (from personal env)
+#   MODHUB_NOTIFICATIONS_QUEUE_URL  SQS queue URL from AWS infrastructure
+#   MODHUB_AWS_REGION       AWS region (e.g., us-east-2)
+#   AUTH_SESSION_SECRET     Secret key for session management
+#   AUTH_OIDC_METADATA_URL  Cognito discovery URL endpoint
+#   AUTH_OIDC_CLIENT_ID     Cognito backstage client ID
+#   AUTH_OIDC_CLIENT_SECRET Cognito backstage client secret
 services:
   backstage:
     build:
@@ -31,19 +26,14 @@ services:
       - '3000:3000'
       - '7007:7007'
     environment:
-      # Without this, the frontend dev server binds to the container's own
-      # loopback interface only ("Loopback: http://localhost:3000/") --
-      # unreachable through Docker's port mapping, which forwards to the
-      # container's external interface, not its loopback. Confirmed
-      # empirically, 2026-09-26: curl from the host got connection refused
-      # until this was set.
+      # Frontend dev server binding
       HOST: '0.0.0.0'
-      # host.docker.internal: the container reaches the HOST's Floci
-      # (localhost:4566 there) through Docker Desktop's bridge -- same
-      # convention already used by infrastructure/envs/local's Lambda env
-      # vars, for the same reason (the container's own "localhost" is
-      # itself, not the host).
+      # AWS infrastructure configuration
       MODHUB_API_BASE_URL: ${MODHUB_API_BASE_URL:-}
+      MODHUB_NOTIFICATIONS_QUEUE_URL: ${MODHUB_NOTIFICATIONS_QUEUE_URL:-}
+      MODHUB_AWS_REGION: ${MODHUB_AWS_REGION:-}
+      # Authentication configuration
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
       AUTH_OIDC_METADATA_URL: ${AUTH_OIDC_METADATA_URL:-}
       AUTH_OIDC_CLIENT_ID: ${AUTH_OIDC_CLIENT_ID:-}
       AUTH_OIDC_CLIENT_SECRET: ${AUTH_OIDC_CLIENT_SECRET:-}
@@ -51,6 +41,4 @@ services:
       - 'host.docker.internal:host-gateway'
     # Note: app-config.yaml's default `backend.database.connection` is
     # `:memory:`, so catalog/scaffolder state does not survive a container
-    # restart. That is intentional for a prototype demo container — swap in
-    # a file path (and a bind-mounted volume) if persistence across restarts
-    # is ever needed for the live defense.
+    # restart. Modify app-config.yaml to use a persistent database if needed.

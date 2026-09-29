@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-#
 # Rebuild what changed and apply it.
 #
 #   ./deploy.sh personal                          apply only
@@ -10,6 +9,7 @@
 #   ./deploy.sh personal --all --sandbox v4       both
 #
 # --plan-only stops before applying.
+# Note: Only personal (real AWS) environment is available. Local development uses docker compose.
 
 set -euo pipefail
 
@@ -24,10 +24,9 @@ die() { echo "error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
 
 case "${TARGET}" in
-  local)    ENV_DIR="infrastructure/envs/local" ;;
   personal) ENV_DIR="infrastructure/envs/personal"; export AWS_PROFILE="${AWS_PROFILE:-personal}" ;;
-  "")       die "no target -- use '$(basename "$0") local|personal [servicios...]'" ;;
-  *)        die "unknown target '${TARGET}' -- use 'local' or 'personal'" ;;
+  "") die "no target -- use '$(basename "$0") personal [services...]' (only personal env is available)" ;;
+  *) die "unknown target '${TARGET}' -- use 'personal'" ;;
 esac
 
 SERVICES=()
@@ -51,7 +50,7 @@ for SERVICE in "${SERVICES[@]:-}"; do
   [[ -n "${SERVICE}" ]] || continue
   step "Building ${SERVICE}"
   BUILD_LOG="$(mktemp)"
-  if bash infrastructure/scripts/build_lambda.sh "" x86_64 "${SERVICE}" >"${BUILD_LOG}" 2>&1; then
+  if bash infrastructure/scripts/build_lambda.sh "" arm64 "${SERVICE}" >"${BUILD_LOG}" 2>&1; then
     grep -E "^==> Done" "${BUILD_LOG}" || true
     rm -f "${BUILD_LOG}"
   else

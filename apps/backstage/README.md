@@ -1,49 +1,37 @@
 # Backstage — Engineering Modernization Hub
 
 This is the self-service portal for the Engineering Modernization Hub: a
-standard [Backstage](https://backstage.io) instance (scaffolded with
-`@backstage/create-app`, standard `packages/app` + `packages/backend` +
-`plugins/*` layout), where a developer will eventually submit a modernization
-request through a Scaffolder template and track its progress against the
-`modhub/v1` API.
+standard [Backstage](https://backstage.io) instance where developers submit
+modernization requests through Scaffolder templates and track progress
+against the `modhub/v1` API.
 
-See the root `CLAUDE.md` for the platform's architecture and `PLAN.md` for
-the phased build order. This instance corresponds to **PLAN.md task 5.1**
-(base app skeleton) — nothing beyond the skeleton is implemented here yet.
+This is a fully local development setup. For real API interaction, you need
+AWS infrastructure deployed (see `infrastructure/envs/personal/`).
 
-## What's here right now
+## What's here
 
-- `packages/app` — the standard Backstage frontend shell (unmodified from
-  the scaffolder defaults beyond branding).
-- `packages/backend` — the standard Backstage backend shell, with a
-  `Dockerfile` adapted to use pnpm instead of the scaffolder's default Yarn
-  (this repo is a pnpm workspace, per `CLAUDE.md`).
-- `plugins/` — empty on purpose. See `plugins/README.md`.
-- `app-config.yaml` — includes a placeholder `auth.providers.oidc` block for
-  logging in against the `modhub-backstage` Cognito app client. The values
-  are unset TODOs (`TODO-set-after-cognito-terraform-apply`), not real
-  credentials — Cognito does not exist yet (`PLAN.md` task 4.1-tf).
-- `docker-compose.yml` — runs the backend for local development, backed by
-  SQLite (`better-sqlite3`), which is what `app-config.yaml` already
-  defaults to. Postgres (used in `app-config.production.yaml`) is
-  unnecessary for a single-user prototype demo.
+- `packages/app` — the standard Backstage frontend shell (customized with branding).
+- `packages/backend` — the standard Backstage backend shell configured with pnpm
+  (this repo is a pnpm workspace).
+- `plugins/modhub` and `plugins/modhub-backend` — custom plugins for modernization
+  request management.
+- `app-config.yaml` — configured for OIDC authentication against AWS Cognito.
+- `docker-compose.yml` — runs Backstage with SQLite for local development.
 
-## What's explicitly NOT here yet
+## Authentication
 
-- **No working login.** The `oidc` auth provider is a config placeholder,
-  not a wired-up provider — it needs `@backstage/plugin-auth-backend-module-oidc-provider`
-  added to `packages/backend` and a real Cognito user pool
-  (`infrastructure/modules/identity`, `PLAN.md` 4.1-tf). Until then, the
-  `guest` provider is what actually works for local development.
-- **No `plugins/modhub` or `plugins/modhub-backend`.** Those are `PLAN.md`
-  tasks 5.2, 5.3 and 5.4 — the Scaffolder template, the `modhub:create-run`
-  action, the Modernizaciones page, and the SQS/Notifications/Signals
-  integration. They depend on a live `modhub/v1` API and a real Cognito user
-  pool, neither of which exist yet. See `plugins/README.md`.
+Backstage supports two authentication methods:
+
+- **Guest** (default) — for local development without AWS credentials.
+- **OIDC** — requires AWS Cognito configuration. Set these environment variables:
+  - `AUTH_OIDC_METADATA_URL`
+  - `AUTH_OIDC_CLIENT_ID`
+  - `AUTH_OIDC_CLIENT_SECRET`
+  - `AUTH_SESSION_SECRET`
 
 ## Running it locally
 
-### Option A — pnpm (recommended while iterating)
+### Option A — pnpm (recommended for development)
 
 ```sh
 pnpm install
@@ -51,25 +39,31 @@ pnpm start
 ```
 
 This starts both the frontend (`http://localhost:3000`) and backend
-(`http://localhost:7007`) in watch mode. Sign in with the **guest**
-provider — the `oidc` provider is not wired up yet (see above).
+(`http://localhost:7007`) in watch mode. Sign in with the **guest** provider
+(no credentials needed).
 
 ### Option B — Docker Compose
 
 ```sh
-# Build the backend bundle on the host first (packages/backend/Dockerfile
-# expects packages/backend/dist/{skeleton,bundle}.tar.gz to already exist):
+# Build the backend bundle on the host first:
 pnpm install
 pnpm tsc
 pnpm build:backend
 
+# Set required environment variables:
+export MODHUB_API_BASE_URL=https://your-api-endpoint.execute-api.us-east-2.amazonaws.com
+export MODHUB_NOTIFICATIONS_QUEUE_URL=https://your-sqs-queue-url
+export MODHUB_AWS_REGION=us-east-2
+export AUTH_SESSION_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+export AUTH_OIDC_METADATA_URL=https://cognito-idp.us-east-2.amazonaws.com/your-pool-id/.well-known/openid-configuration
+export AUTH_OIDC_CLIENT_ID=your-client-id
+export AUTH_OIDC_CLIENT_SECRET=your-client-secret
+
 docker compose up --build
 ```
 
-This runs only the backend container, listening on `http://localhost:7007`.
-There is no separate frontend container in this prototype — see
-`packages/backend/Dockerfile`'s header comment for the full build sequence
-`docker compose` assumes has already run on the host.
+This runs the Backstage container with persistent storage for development.
+Access the frontend at `http://localhost:3000` and backend at `http://localhost:7007`.
 
 ## Package manager note
 

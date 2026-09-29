@@ -14,17 +14,9 @@
 # Linux wheels for the third-party dependencies regardless of the host
 # OS/Python running this script.
 #
-# Architecture defaults to arm64, matching each module's `lambda_architectures`
-# default for real AWS (Graviton2, same cost rationale as the sandbox
-# Fargate task in the design artifact). Pass x86_64 explicitly when building
-# for Floci: empirically (2026-09-25, `boto3 invoke` against a real deployed
-# function), Floci runs Lambda containers as the Docker host's native
-# architecture -- it does not cross-emulate arm64 -- so an arm64 .so there
-# fails to import with a misleading "No module named
-# 'pydantic_core._pydantic_core'" (not an ImportError naming the real
-# cause). infrastructure/envs/local overrides `lambda_architectures` to
-# ["x86_64"] for exactly this reason; keep this script's default in sync
-# with envs/personal (arm64), not envs/local.
+# Architecture defaults to arm64, matching AWS Lambda's default for real AWS
+# deployments (Graviton2 instances). The x86_64 option is maintained for
+# compatibility and testing purposes.
 #
 # Usage:
 #   infrastructure/scripts/build_lambda.sh [output_zip_path] [arch] [service]
@@ -32,9 +24,7 @@
 #   service: api (default) | fetch_repo | core_ops | fetch_doc | agent_phase | open_pr
 #
 # Default output: infrastructure/scripts/build/<service>_lambda_<arch>.zip
-# -- the architecture is part of the default filename on purpose: building
-# both arm64 (envs/personal, real AWS) and x86_64 (envs/local, Floci) for
-# the same service must never let one silently overwrite the other.
+# -- the architecture is part of the default filename to prevent overwrites.
 
 set -euo pipefail
 
