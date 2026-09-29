@@ -10,7 +10,6 @@ members = [
     "services/*",
     "strategies/*",
     "packages/*",
-    "apps/cli",
 ]
 
 [tool.uv]
