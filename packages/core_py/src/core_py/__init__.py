@@ -4,10 +4,9 @@ Re-exports the public surface of core_py.
 
 from core_py.bedrock_models import ModelRole, resolve_model_id
 from core_py.observability import log_event
-from core_py.pricing import estimate_cost_usd
+from core_py.pricing import estimate_cost_usd, rate_for
 from core_py.scope import ResolvedScope, resolve_scope
 from core_py.models import (
-    ApprovalDecision,
     Event,
     Restricciones,
     Run,
@@ -19,7 +18,6 @@ from core_py.models import (
 )
 
 __all__ = [
-    "ApprovalDecision",
     "Event",
     "ModelRole",
     "Restricciones",
@@ -32,6 +30,7 @@ __all__ = [
     "StrategyModelLimits",
     "estimate_cost_usd",
     "log_event",
+    "rate_for",
     "resolve_model_id",
     "resolve_scope",
 ]

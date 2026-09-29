@@ -28,20 +28,6 @@ class RunStatus(str, Enum):
     LISTO_PARA_REVISION = "LISTO_PARA_REVISION"
 
 
-FINAL_STATES_ORDER: tuple[RunStatus, ...] = (
-    RunStatus.PRESUPUESTO_AGOTADO,
-    RunStatus.BLOQUEADO,
-    RunStatus.FALLIDO_CONTROLADO,
-    RunStatus.COMPLETADO_PARCIALMENTE,
-    RunStatus.LISTO_PARA_REVISION,
-)
-
-
-class ApprovalDecision(str, Enum):
-    APPROVE = "approve"
-    REJECT = "reject"
-
-
 class Restricciones(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -80,9 +66,6 @@ class Run(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
-    def model_dump_json_shape(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
 
 class Event(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -117,16 +100,22 @@ class StrategyModelLimits(BaseModel):
     code_max_tokens: int = 8192
 
 
+class CheckSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    blocking: bool = True
+
+
 class StrategyManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
     version: str
     title: str
-    applies_to: dict[str, Any] = Field(default_factory=dict)
     inputs: dict[str, Any] = Field(default_factory=dict)
     limits: StrategyLimits
-    checks: list[str]
+    checks: list[CheckSpec]
     writable_paths: list[str]
     excluded_paths: list[str] = Field(default_factory=list)
     sources: list[str]

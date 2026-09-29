@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core_py.models import StrategyLimit, StrategyLimits, StrategyManifest
+from core_py.models import CheckSpec, StrategyLimit, StrategyLimits, StrategyManifest
 
 _INPUTS = {
     "target_version": {
@@ -25,7 +25,7 @@ _LIMITS = StrategyLimits(
     max_minutes=StrategyLimit(default=20, max=45),
 )
 
-_CHECKS = ["install", "unit_tests", "lint"]
+_CHECKS = [CheckSpec(name="unit_tests"), CheckSpec(name="lint", blocking=False)]
 
 _WRITABLE_PATHS = [
     "**/*.py",
@@ -49,10 +49,6 @@ def manifest() -> StrategyManifest:
         id="python-pydantic-v2",
         version="1.0.0",
         title="Pydantic v1 -> v2",
-        applies_to={
-            "language": "python",
-            "detect": ["pydantic<2 en pyproject.toml o requirements*.txt"],
-        },
         inputs=_INPUTS,
         limits=_LIMITS,
         checks=_CHECKS,
@@ -61,5 +57,3 @@ def manifest() -> StrategyManifest:
         sources=_SOURCES,
     )
 
-
-EXCLUDED_PATHS = _EXCLUDED_PATHS

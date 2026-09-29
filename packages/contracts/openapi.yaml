@@ -883,6 +883,17 @@ components:
         max_minutes:
           $ref: "#/components/schemas/StrategyLimit"
 
+    CheckSpec:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          enum: [unit_tests, lint]
+        blocking:
+          type: boolean
+          default: true
+
     StrategyManifest:
       type: object
       required: [id, version, title, checks, writable_paths, sources, limits, inputs]
@@ -893,9 +904,6 @@ components:
           type: string
         title:
           type: string
-        applies_to:
-          type: object
-          additionalProperties: true
         inputs:
           type: object
           description: JSON-schema-like description of the strategy's own inputs.
@@ -905,7 +913,7 @@ components:
         checks:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/CheckSpec"
         writable_paths:
           type: array
           items:

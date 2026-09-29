@@ -63,8 +63,6 @@ def fetch_and_store_repo(
     try:
         response = http_session.get(url, timeout=30)
         response.raise_for_status()
-    except TarSanitizationError:
-        raise
     except Exception as exc:  # noqa: BLE001 - re-raised as our own type
         raise HttpGetError(f"failed to download {url}: {exc}") from exc
 

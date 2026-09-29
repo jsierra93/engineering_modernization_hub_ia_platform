@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -28,7 +29,8 @@ def _floats_to_decimal(item: dict[str, Any]) -> dict[str, Any]:
 DEFAULT_RUNS_TABLE = os.environ.get("RUNS_TABLE_NAME", "modhub-runs")
 DEFAULT_EVENTS_TABLE = os.environ.get("EVENTS_TABLE_NAME", "modhub-events")
 
-GSI_STATUS = "gsi_status"
+MAX_APPEND_ATTEMPTS = 10
+
 GSI_REQUESTED_BY = "gsi_requested_by"
 
 
@@ -45,6 +47,16 @@ def _known_fields_only(model: type[BaseModel], item: dict[str, Any]) -> dict[str
 
 def _item_to_run(item: dict[str, Any]) -> Run:
     return Run.model_validate(_known_fields_only(Run, item))
+
+
+def _query_all(table: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    while True:
+        resp = table.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        if "LastEvaluatedKey" not in resp:
+            return items
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
 
 def _event_to_item(event: Event) -> dict[str, Any]:
@@ -69,26 +81,31 @@ class RunsTable:
     def put(self, run: Run) -> None:
         self._table.put_item(Item=_run_to_item(run))
 
+    def update_fields(self, run: Run, *fields: str) -> None:
+        item = _run_to_item(run)
+        values = {name: item[name] for name in fields}
+        values["updated_at"] = datetime.now(UTC).isoformat()
+        names = {f"#f{i}": name for i, name in enumerate(values)}
+        placeholders = {f":v{i}": value for i, value in enumerate(values.values())}
+        self._table.update_item(
+            Key={"run_id": item["run_id"]},
+            UpdateExpression="SET " + ", ".join(f"#f{i} = :v{i}" for i in range(len(values))),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=placeholders,
+        )
+
     def get(self, run_id: uuid.UUID | str) -> Run | None:
         resp = self._table.get_item(Key={"run_id": str(run_id)})
         item = resp.get("Item")
         return _item_to_run(item) if item else None
 
-    def query_by_status(self, status: str) -> list[Run]:
-        resp = self._table.query(
-            IndexName=GSI_STATUS,
-            KeyConditionExpression=conditions.Key("status").eq(status),
-        )
-        return [_item_to_run(item) for item in resp.get("Items", [])]
-
     def query_by_requested_by(self, requested_by: str) -> list[Run]:
-        resp = self._table.query(
+        items = _query_all(
+            self._table,
             IndexName=GSI_REQUESTED_BY,
-            KeyConditionExpression=conditions.Key("requested_by").eq(
-                requested_by
-            ),
+            KeyConditionExpression=conditions.Key("requested_by").eq(requested_by),
         )
-        return [_item_to_run(item) for item in resp.get("Items", [])]
+        return [_item_to_run(item) for item in items]
 
     def add_spend(self, run_id: uuid.UUID | str, delta: float) -> float:
         # Unconditional on purpose: the money is already spent, so the ledger must record it (invariant 6).
@@ -152,16 +169,24 @@ class EventsTable:
         self._table = self._resource.Table(table_name)
 
     def append(self, event: Event) -> None:
-        self._table.put_item(Item=_event_to_item(event))
+        self._table.put_item(Item=_event_to_item(event), ConditionExpression="attribute_not_exists(seq)")
+
+    def append_next(self, event: Event) -> Event:
+        seq = len(self.query_by_run_id(event.run_id))
+        for _ in range(MAX_APPEND_ATTEMPTS):
+            candidate = event.model_copy(update={"seq": seq})
+            try:
+                self.append(candidate)
+                return candidate
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                    raise
+                seq += 1
+        raise RuntimeError(f"could not append an event for run {event.run_id} after {MAX_APPEND_ATTEMPTS} attempts")
 
     def query_by_run_id(self, run_id: uuid.UUID | str) -> list[Event]:
-        resp = self._table.query(
-            KeyConditionExpression=conditions.Key("run_id").eq(
-                str(run_id)
-            ),
-        )
-        items = sorted(resp.get("Items", []), key=lambda i: i["seq"])
-        return [_item_to_event(item) for item in items]
+        items = _query_all(self._table, KeyConditionExpression=conditions.Key("run_id").eq(str(run_id)))
+        return [_item_to_event(item) for item in sorted(items, key=lambda i: i["seq"])]
 
 
 def create_tables(
@@ -174,19 +199,9 @@ def create_tables(
         KeySchema=[{"AttributeName": "run_id", "KeyType": "HASH"}],
         AttributeDefinitions=[
             {"AttributeName": "run_id", "AttributeType": "S"},
-            {"AttributeName": "status", "AttributeType": "S"},
             {"AttributeName": "requested_by", "AttributeType": "S"},
         ],
         GlobalSecondaryIndexes=[
-            {
-                "IndexName": GSI_STATUS,
-                "KeySchema": [{"AttributeName": "status", "KeyType": "HASH"}],
-                "Projection": {"ProjectionType": "ALL"},
-                "ProvisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5,
-                },
-            },
             {
                 "IndexName": GSI_REQUESTED_BY,
                 "KeySchema": [{"AttributeName": "requested_by", "KeyType": "HASH"}],

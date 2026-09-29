@@ -41,7 +41,11 @@ class Guardrail:
                 f"{GUARDRAIL_ID_ENV} is not set. Set it, or set "
                 f"{GUARDRAIL_OPTIONAL_ENV}=true to run without the prompt-attack filter."
             )
-        version = os.environ.get(GUARDRAIL_VERSION_ENV) or "DRAFT"
+        version = os.environ.get(GUARDRAIL_VERSION_ENV)
+        if not version:
+            raise GuardrailNotConfiguredError(
+                f"{GUARDRAIL_VERSION_ENV} is not set: an unpublished (DRAFT) guardrail is never used implicitly."
+            )
         return cls(guardrail_id, version, client=client, region_name=region_name)
 
     def _bedrock(self) -> Any:

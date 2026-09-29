@@ -54,10 +54,6 @@ def _all_checks_pass(inputs: VerdictInputs) -> bool:
     return len(inputs.checks) > 0 and all(inputs.checks.values())
 
 
-def evaluate_verdict(inputs: VerdictInputs) -> RunStatus:
-    return evaluate_verdict_with_reason(inputs)[0]
-
-
 # Order is the contract: first match wins. Weakening the suite outranks a merely failing fix loop.
 def evaluate_verdict_with_reason(inputs: VerdictInputs) -> tuple[RunStatus, str]:
     if inputs.budget.spent_usd >= inputs.budget.max_usd:

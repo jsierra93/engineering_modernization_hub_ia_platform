@@ -24,6 +24,7 @@ _SYSTEM_PROMPT = (
 )
 
 
+MAX_TOKENS = 256
 MIN_CONFIDENCE_ENV = "MODHUB_RESOLVER_MIN_CONFIDENCE"
 DEFAULT_MIN_CONFIDENCE = 0.6
 
@@ -69,20 +70,13 @@ def resolve_strategy(
     user_message = json.dumps({"objetivo": objetivo, "candidates": catalog})
 
     try:
-        response = _client(bedrock_client).invoke_model(
+        response = _client(bedrock_client).converse(
             modelId=resolved_model_id,
-            body=json.dumps(
-                {
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 256,
-                    "temperature": 0,
-                    "system": _SYSTEM_PROMPT,
-                    "messages": [{"role": "user", "content": user_message}],
-                }
-            ),
+            system=[{"text": _SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": user_message}]}],
+            inferenceConfig={"maxTokens": MAX_TOKENS, "temperature": 0},
         )
-        payload = json.loads(response["body"].read())
-        text = payload["content"][0]["text"]
+        text = response["output"]["message"]["content"][0]["text"]
     except (ClientError, BotoCoreError) as exc:
         log_event("resolver.unavailable", model_id=resolved_model_id, error=str(exc)[:300])
         raise ResolverUnavailableError(str(exc)) from exc

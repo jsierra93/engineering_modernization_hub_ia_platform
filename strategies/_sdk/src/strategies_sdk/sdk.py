@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from core_py.constants import CHECK_VOCABULARY
 from core_py.limits import LIMIT_FIELDS, PlatformCeiling, platform_ceiling
 from core_py.models import StrategyManifest
 
@@ -36,6 +37,20 @@ def _validate_inputs_schema(inputs: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _validate_checks(manifest: StrategyManifest) -> list[str]:
+    names = [check.name for check in manifest.checks]
+    errors = [
+        f"checks.{name} is not in the platform vocabulary {list(CHECK_VOCABULARY)}"
+        for name in names
+        if name not in CHECK_VOCABULARY
+    ]
+    if len(set(names)) != len(names):
+        errors.append("checks must not repeat a name")
+    if not any(check.blocking for check in manifest.checks):
+        errors.append("checks must declare at least one blocking check")
+    return errors
+
+
 def validate_manifest(
     manifest: StrategyManifest,
     ceiling: PlatformCeiling = PLATFORM_CEILING,
@@ -59,8 +74,7 @@ def validate_manifest(
                 f"({limit.max})"
             )
 
-    if not manifest.checks:
-        errors.append("checks must declare at least one named check")
+    errors.extend(_validate_checks(manifest))
     if not manifest.writable_paths:
         errors.append("writable_paths must declare at least one path")
     if not manifest.sources:

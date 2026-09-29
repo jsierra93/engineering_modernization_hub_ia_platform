@@ -13,6 +13,9 @@ from core_py.constants import WORKING_VERSION, WORKSPACE_BUCKET_ENV
 GITHUB_API = "https://api.github.com"
 GITHUB_TOKEN_SECRET_ARN_ENV = "GITHUB_TOKEN_SECRET_ARN"
 
+BRANCH_PREFIX = "modhub"
+COMMIT_SUBJECT_MAX_CHARS = 60
+PR_TITLE_MAX_CHARS = 70
 PUBLISHABLE_STATES = {"LISTO_PARA_REVISION", "COMPLETADO_PARCIALMENTE"}
 
 
@@ -178,7 +181,7 @@ def open_pull_request(
 
     github = GitHub(token, session)
     repo = run_data["repo"]
-    branch = f"modhub/{run_id[:8]}"
+    branch = f"{BRANCH_PREFIX}/{run_id[:8]}"
 
     try:
         existing = github.find_pull_request(repo, branch)
@@ -195,13 +198,13 @@ def open_pull_request(
             branch,
             run_data["commit"],
             files,
-            f"modhub: {run_data['objetivo'][:60]}\n\nrun {run_id}\nstrategy {run_data['strategy_id']}",
+            f"{BRANCH_PREFIX}: {run_data['objetivo'][:COMMIT_SUBJECT_MAX_CHARS]}\n\nrun {run_id}\nstrategy {run_data['strategy_id']}",
         )
         url = github.open_pull_request(
             repo,
             branch,
             base,
-            f"Modernization: {run_data['objetivo'][:70]}",
+            f"Modernization: {run_data['objetivo'][:PR_TITLE_MAX_CHARS]}",
             _pr_body(run_data),
         )
     except PullRequestError as exc:
