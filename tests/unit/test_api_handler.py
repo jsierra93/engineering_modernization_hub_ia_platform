@@ -137,10 +137,8 @@ def test_create_run_no_strategy_match_returns_422(runs_table, sfn_client):
 
 
 def test_create_run_dev_strategy_bypass_skips_bedrock(runs_table, sfn_client, monkeypatch):
-    """MODHUB_DEV_STRATEGY_ID (local-dev only, see infrastructure/envs/local)
-    skips resolve_strategy/Bedrock entirely -- Floci doesn't emulate real
-    model inference, so this is what lets FetchRepo/Baseline stay
-    exercisable there."""
+    """MODHUB_DEV_STRATEGY_ID (development-only mode) skips resolve_strategy/Bedrock
+    entirely to allow testing when model inference is not available."""
     monkeypatch.setenv("MODHUB_DEV_STRATEGY_ID", "python-pydantic-v2")
     unused_bedrock_client = MagicMock()
 
