@@ -66,6 +66,12 @@ RUN mkdir -p /workspace /output \
 COPY --chown=sandbox:sandbox entrypoint.py /usr/local/bin/entrypoint.py
 RUN chmod 0555 /usr/local/bin/entrypoint.py
 
+# The check profile (which named checks exist and the fixed command of each) is data the
+# platform bakes into the image; the sandbox user can read it but not change it.
+ARG SANDBOX_PROFILE=python
+COPY profiles/${SANDBOX_PROFILE}.json /etc/modhub/profile.json
+RUN chmod 0444 /etc/modhub/profile.json
+
 WORKDIR /workspace
 USER sandbox
 

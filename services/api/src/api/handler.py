@@ -26,6 +26,7 @@ from api.resolver import NoStrategyMatchError, ResolverUnavailableError, resolve
 from api.strategy_lookup import list_strategy_manifests
 
 STATE_MACHINE_ARN_ENV = "MODHUB_STATE_MACHINE_ARN"
+SANDBOX_TASK_DEFINITIONS_ENV = "MODHUB_SANDBOX_TASK_DEFINITIONS"
 APPROVAL_MAX_AUTH_AGE_SECONDS_ENV = "MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS"
 DEV_STRATEGY_ID_ENV = "MODHUB_DEV_STRATEGY_ID"
 REPO_ALLOWLIST_ENV = "MODHUB_REPO_ALLOWLIST"
@@ -221,7 +222,15 @@ def _build_run(body: dict[str, Any], manifest: Any, requested_by: str, trace_id:
         raise _Reject(422, "INVALID_REQUEST", problems) from None
 
 
-def _start_execution(sfn_client: Any, run: Run, trace_id: str) -> None:
+def _sandbox_task_definition(manifest: Any) -> str:
+    arns = json.loads(os.environ.get(SANDBOX_TASK_DEFINITIONS_ENV, "{}"))
+    arn = arns.get(manifest.sandbox_profile)
+    if arn is None:
+        raise _Reject(503, "SANDBOX_PROFILE_UNAVAILABLE", f"no sandbox is deployed for profile {manifest.sandbox_profile!r}")
+    return arn
+
+
+def _start_execution(sfn_client: Any, run: Run, trace_id: str, sandbox_task_definition_arn: str) -> None:
     state_machine_arn = os.environ[STATE_MACHINE_ARN_ENV]
     sfn_client.start_execution(
         stateMachineArn=state_machine_arn,
@@ -234,6 +243,7 @@ def _start_execution(sfn_client: Any, run: Run, trace_id: str) -> None:
                 "commit": run.commit,
                 "objetivo": run.objetivo,
                 "strategy_id": run.strategy_id,
+                "sandbox_task_definition_arn": sandbox_task_definition_arn,
                 "max_iterations": run.max_iterations,
                 "excluded_paths": run.restricciones.excluded_paths,
                 "iteration": 0,
@@ -254,6 +264,7 @@ def create_run(
     _check_repo_allowed(body)
     manifest, match_confidence = _resolve_manifest(body, trace_id, bedrock_client)
     _validate_limits(body, manifest, trace_id)
+    sandbox_task_definition_arn = _sandbox_task_definition(manifest)
     requested_by = _requested_by(event)
     run = _build_run(body, manifest, requested_by, trace_id)
 
@@ -269,7 +280,7 @@ def create_run(
         max_iterations=run.max_iterations,
         max_minutes=run.max_minutes,
     )
-    _start_execution(sfn_client, run, trace_id)
+    _start_execution(sfn_client, run, trace_id, sandbox_task_definition_arn)
 
     return _ok_response(
         201,

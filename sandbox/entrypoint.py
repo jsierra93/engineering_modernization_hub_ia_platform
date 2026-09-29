@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Sandbox entrypoint: runs exactly one named check (install, unit_tests, lint), never a free command.
-No AWS SDK or credentials: workspace and JUnit travel over presigned URLs.
+"""Sandbox entrypoint: runs exactly one named check from the image's profile (/etc/modhub/profile.json), never a free command.
+The profile is data baked into the image; only the platform ships it. No AWS SDK or credentials: workspace and JUnit travel over presigned URLs.
 Exit codes: 0 passed, 1 check failed, 2 usage or transport error.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -14,6 +16,8 @@ from pathlib import Path
 
 WORKSPACE = Path("/workspace")
 OUTPUT = Path("/output")
+
+PROFILE_PATH = Path(os.environ.get("MODHUB_PROFILE_PATH", "/etc/modhub/profile.json"))
 
 WORKSPACE_GET_URL_ENV = "WORKSPACE_GET_URL"
 JUNIT_PUT_URL_ENV = "JUNIT_PUT_URL"
@@ -90,12 +94,7 @@ def push_junit(url: str) -> None:
     except Exception as exc:  # noqa: BLE001 - re-raised as our own type
         raise WorkspaceFetchError(f"failed to push {junit_path} to presigned URL: {exc}") from exc
 
-KNOWN_CHECKS = ("install", "unit_tests", "lint")
-
-
 def _emit(event: str, **fields) -> None:
-    import json
-
     print(json.dumps({"event": event, **fields}, default=str), flush=True)
 
 
@@ -121,38 +120,6 @@ def _run(cmd: list[str], cwd: Path = WORKSPACE) -> subprocess.CompletedProcess:
     )
 
 
-def check_install() -> int:
-    requirements = sorted(WORKSPACE.glob("requirements*.txt"))
-    pyproject = WORKSPACE / "pyproject.toml"
-
-    ran_any = False
-    overall_rc = 0
-
-    for req_file in requirements:
-        result = _run([sys.executable, "-m", "pip", "install", "--user", "-r", str(req_file)])
-        _write_log(f"install.{req_file.name}", result)
-        ran_any = True
-        if result.returncode != 0:
-            overall_rc = result.returncode
-
-    if pyproject.exists():
-        result = _run([sys.executable, "-m", "pip", "install", "--user", "-e", "."])
-        _write_log("install.pyproject", result)
-        ran_any = True
-        if result.returncode != 0:
-            overall_rc = result.returncode
-
-    if not ran_any:
-        (OUTPUT / "install.log").write_text(
-            "No requirements*.txt and no pyproject.toml found in /workspace; "
-            "nothing to install.\n",
-            encoding="utf-8",
-        )
-        return 0
-
-    return overall_rc
-
-
 def _junit_summary(junit_path: Path) -> dict:
     if not junit_path.exists():
         return {"junit": "missing"}
@@ -173,76 +140,71 @@ def _junit_summary(junit_path: Path) -> dict:
         return {"junit": f"unparseable: {exc}"}
 
 
-def check_unit_tests() -> int:
-    install_rc = check_install()
-    if install_rc != 0:
-        _emit("sandbox.install_failed_before_tests", exit_code=install_rc)
-        return install_rc
+def _expand(cmd: list[str], **values: str) -> list[str]:
+    return [part.format(python=sys.executable, workspace=str(WORKSPACE), **values) for part in cmd]
+
+
+def _prepare(name: str, group: dict) -> int:
+    overall_rc = 0
+    ran_any = False
+    for step in group["steps"]:
+        if "each_glob" in step:
+            targets = [(path.name, str(path)) for path in sorted(WORKSPACE.glob(step["each_glob"]))]
+        elif (WORKSPACE / step["when_exists"]).exists():
+            targets = [("", "")]
+        else:
+            targets = []
+        for file_name, file in targets:
+            result = _run(_expand(step["cmd"], file=file))
+            _write_log(step["log"].format(file_name=file_name), result)
+            ran_any = True
+            if result.returncode != 0:
+                overall_rc = result.returncode
+    if not ran_any:
+        (OUTPUT / f"{name}.log").write_text(group["empty_note"], encoding="utf-8")
+    return overall_rc
+
+
+def run_check(profile: dict, name: str) -> int:
+    spec = profile["checks"][name]
+    if "prepare" in spec:
+        prepare_rc = _prepare(spec["prepare"], profile["prepare"][spec["prepare"]])
+        if prepare_rc != 0:
+            _emit("sandbox.prepare_failed_before_check", check=name, exit_code=prepare_rc)
+            return prepare_rc
+    run = spec.get("run")
+    if run is None:
+        return 0
 
     junit_path = OUTPUT / "junit.xml"
-    result = _run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(WORKSPACE),
-            f"--junitxml={junit_path}",
-            "-v",
-        ]
-    )
-    _write_log("unit_tests", result)
-    _emit("sandbox.junit_crosscheck", exit_code=result.returncode, **_junit_summary(junit_path))
-
-    if not junit_path.exists():
-        (OUTPUT / "unit_tests.error").write_text(
-            "pytest did not produce /output/junit.xml — see unit_tests.log.\n",
-            encoding="utf-8",
-        )
-        return result.returncode or 1
-
+    result = _run(_expand(run["cmd"], junit=str(junit_path), lint_report=str(OUTPUT / "lint.json")))
+    _write_log(run["log"], result)
+    if run.get("junit"):
+        _emit("sandbox.junit_crosscheck", exit_code=result.returncode, **_junit_summary(junit_path))
+        if not junit_path.exists():
+            (OUTPUT / f"{run['log']}.error").write_text(
+                f"{run['log']} did not produce /output/junit.xml -- see {run['log']}.log.\n", encoding="utf-8"
+            )
+            return result.returncode or 1
     return result.returncode
 
 
-def check_lint() -> int:
-    report_path = OUTPUT / "lint.json"
-    result = _run(
-        [
-            sys.executable,
-            "-m",
-            "ruff",
-            "check",
-            str(WORKSPACE),
-            "--output-format=json",
-            f"--output-file={report_path}",
-        ]
-    )
-    _write_log("lint", result)
-    return result.returncode
-
-
-CHECKS = {
-    "install": check_install,
-    "unit_tests": check_unit_tests,
-    "lint": check_lint,
-}
+def load_profile() -> dict:
+    return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
 
 
 def main(argv: list[str]) -> int:
-    import os
-
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    profile = load_profile()
+    known = ", ".join(profile["checks"])
 
     if len(argv) != 1:
-        sys.stderr.write(
-            f"usage: entrypoint.py <check>\nknown checks: {', '.join(KNOWN_CHECKS)}\n"
-        )
+        sys.stderr.write(f"usage: entrypoint.py <check>\nknown checks: {known}\n")
         return 2
 
     name = argv[0]
-    if name not in CHECKS:
-        sys.stderr.write(
-            f"unknown check '{name}'. known checks: {', '.join(KNOWN_CHECKS)}\n"
-        )
+    if name not in profile["checks"]:
+        sys.stderr.write(f"unknown check '{name}'. known checks: {known}\n")
         return 2
 
     workspace_get_url = os.environ.get(WORKSPACE_GET_URL_ENV)
@@ -258,7 +220,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     _emit("sandbox.check_started", check=name)
-    exit_code = CHECKS[name]()
+    exit_code = run_check(profile, name)
     _emit("sandbox.check_finished", check=name, exit_code=exit_code)
 
     junit_put_url = os.environ.get(JUNIT_PUT_URL_ENV)

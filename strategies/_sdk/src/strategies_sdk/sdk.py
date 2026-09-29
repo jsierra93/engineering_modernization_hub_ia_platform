@@ -82,6 +82,8 @@ def validate_manifest(
     errors.extend(_validate_checks(manifest))
     if not manifest.description.strip():
         errors.append("description must say what the strategy does, in one sentence")
+    if not manifest.sandbox_profile.strip() or manifest.sandbox_profile != manifest.sandbox_profile.lower():
+        errors.append("sandbox_profile must be a non-empty lowercase profile name such as \"python\"")
     if not manifest.ecosystem.strip() or manifest.ecosystem != manifest.ecosystem.lower():
         errors.append("ecosystem must be a non-empty lowercase name such as \"python\"")
     if not manifest.writable_paths:

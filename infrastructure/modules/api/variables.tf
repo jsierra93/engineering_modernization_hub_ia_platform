@@ -82,6 +82,11 @@ variable "log_retention_days" {
   default     = 14
 }
 
+variable "sandbox_task_definition_arns" {
+  description = "Sandbox task definition ARN per profile. The API resolves the strategy's sandbox_profile to one of these when it starts an execution."
+  type        = map(string)
+}
+
 variable "cors_allow_origins" {
   description = "Allowed CORS origins for the HTTP API. Empty disables CORS; never default to a wildcard."
   type        = list(string)

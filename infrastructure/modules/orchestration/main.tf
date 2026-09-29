@@ -5,7 +5,6 @@ locals {
 
   asl_definition = templatefile(local.asl_definition_path, {
     sandbox_cluster_arn          = var.sandbox_cluster_arn
-    sandbox_task_definition_arn  = var.sandbox_task_definition_arn
     sandbox_container_name       = var.sandbox_container_name
     sandbox_subnet_ids           = jsonencode(var.sandbox_subnet_ids)
     sandbox_security_group_ids   = jsonencode(var.sandbox_security_group_ids)
@@ -81,7 +80,7 @@ data "aws_iam_policy_document" "sandbox_run_task" {
     sid       = "RunSandboxTaskDefinitionOnly"
     effect    = "Allow"
     actions   = ["ecs:RunTask"]
-    resources = [var.sandbox_task_definition_arn]
+    resources = var.sandbox_task_definition_arns
 
     condition {
       test     = "ArnEquals"

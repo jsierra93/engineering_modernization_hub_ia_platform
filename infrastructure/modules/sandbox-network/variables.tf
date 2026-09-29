@@ -58,17 +58,11 @@ variable "sandbox_architecture" {
   }
 }
 
-variable "sandbox_image_tag" {
-  description = <<-EOT
-    Image tag the sandbox task definition references, inside the ECR
-    repository this module creates. Defaults to a tag that does not exist
-    yet on purpose -- pushing the actual sandbox image (built under
-    sandbox/ by a parallel task) is out of this module's scope. The task
-    definition is still structurally valid Terraform; it just cannot
-    successfully RunTask until an image is pushed under this tag.
-  EOT
-  type        = string
-  default     = "unbuilt"
+variable "sandbox_profiles" {
+  description = "One sandbox per profile a strategy can name in its manifest. Each entry is the tag of that profile's image in this module's ECR repository and gets its own task definition."
+  type = map(object({
+    image_tag = string
+  }))
 }
 
 variable "sandbox_container_name" {

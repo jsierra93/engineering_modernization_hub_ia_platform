@@ -900,7 +900,7 @@ components:
 
     StrategyManifest:
       type: object
-      required: [id, version, title, description, ecosystem, checks, writable_paths, sources, limits, inputs]
+      required: [id, version, title, description, ecosystem, sandbox_profile, checks, writable_paths, sources, limits, inputs]
       properties:
         id:
           type: string
@@ -913,6 +913,9 @@ components:
         ecosystem:
           type: string
           description: Lowercase language or ecosystem the strategy applies to, such as python.
+        sandbox_profile:
+          type: string
+          description: Which sandbox image runs this strategy's checks. Only the platform ships profiles.
         inputs:
           type: object
           description: JSON-schema-like description of the strategy's own inputs.

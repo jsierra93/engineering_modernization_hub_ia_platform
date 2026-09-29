@@ -33,14 +33,9 @@ output "ecs_cluster_name" {
   value       = aws_ecs_cluster.sandbox.name
 }
 
-output "task_definition_arn" {
-  description = "ARN of the sandbox task definition (specific revision). infrastructure/modules/orchestration's IAM role is scoped to exactly this ARN for ecs:RunTask."
-  value       = aws_ecs_task_definition.sandbox.arn
-}
-
-output "task_definition_family" {
-  description = "Family name of the sandbox task definition."
-  value       = aws_ecs_task_definition.sandbox.family
+output "task_definition_arns" {
+  description = "Task definition ARN (specific revision) per sandbox profile. infrastructure/modules/orchestration's IAM role is scoped to exactly these ARNs for ecs:RunTask, and the API hands the right one to each execution."
+  value       = { for profile, task in aws_ecs_task_definition.sandbox : profile => task.arn }
 }
 
 output "execution_role_arn" {

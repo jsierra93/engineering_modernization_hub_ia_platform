@@ -1,0 +1,21 @@
+{
+  "prepare": {
+    "install": {
+      "empty_note": "No requirements*.txt and no pyproject.toml found in /workspace; nothing to install.\n",
+      "steps": [
+        {"each_glob": "requirements*.txt", "log": "install.{file_name}", "cmd": ["{python}", "-m", "pip", "install", "--user", "-r", "{file}"]},
+        {"when_exists": "pyproject.toml", "log": "install.pyproject", "cmd": ["{python}", "-m", "pip", "install", "--user", "-e", "."]}
+      ]
+    }
+  },
+  "checks": {
+    "install": {"prepare": "install"},
+    "unit_tests": {
+      "prepare": "install",
+      "run": {"log": "unit_tests", "junit": true, "cmd": ["{python}", "-m", "pytest", "{workspace}", "--junitxml={junit}", "-v"]}
+    },
+    "lint": {
+      "run": {"log": "lint", "cmd": ["{python}", "-m", "ruff", "check", "{workspace}", "--output-format=json", "--output-file={lint_report}"]}
+    }
+  }
+}

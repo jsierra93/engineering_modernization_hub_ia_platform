@@ -26,9 +26,9 @@ variable "sandbox_cluster_arn" {
   type        = string
 }
 
-variable "sandbox_task_definition_arn" {
-  description = "ARN of the sandbox-network module's task definition (specific revision). The state machine's ecs:RunTask grant is scoped to exactly this ARN -- no other task definition can be launched with this role."
-  type        = string
+variable "sandbox_task_definition_arns" {
+  description = "ARNs of the sandbox task definitions, one per sandbox profile. The state machine's ecs:RunTask grant is scoped to exactly these -- no other task definition can be launched with this role. Which one runs is chosen per execution from the run's strategy."
+  type        = list(string)
 }
 
 variable "sandbox_execution_role_arn" {

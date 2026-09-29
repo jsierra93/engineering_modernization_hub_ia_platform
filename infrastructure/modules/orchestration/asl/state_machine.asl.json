@@ -44,7 +44,7 @@
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
-        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "TaskDefinition.$": "$.sandbox_task_definition_arn",
         "LaunchType": "FARGATE",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
@@ -132,7 +132,7 @@
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
-        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "TaskDefinition.$": "$.sandbox_task_definition_arn",
         "LaunchType": "FARGATE",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
@@ -514,7 +514,7 @@
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
-        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "TaskDefinition.$": "$.sandbox_task_definition_arn",
         "LaunchType": "FARGATE",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
@@ -870,7 +870,7 @@
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
-        "TaskDefinition": "${sandbox_task_definition_arn}",
+        "TaskDefinition.$": "$.sandbox_task_definition_arn",
         "LaunchType": "FARGATE",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {

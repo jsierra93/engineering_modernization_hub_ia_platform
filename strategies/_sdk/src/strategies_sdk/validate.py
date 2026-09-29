@@ -1,35 +1,28 @@
-"""Pre-registration check for every discovered strategy: manifest rules, unique ids, and that
-each declared check is one the sandbox can actually run. Run it with scripts/validate-strategies.sh.
+"""Pre-registration check for every discovered strategy: manifest rules, unique ids, and that its
+sandbox profile exists and offers every check the strategy declares. Run it with scripts/validate-strategies.sh.
 """
 
 from __future__ import annotations
 
-import ast
+import json
 import sys
 from pathlib import Path
 
-from core_py.constants import CHECK_VOCABULARY
 from core_py.limits import platform_ceiling
 
 from strategies_sdk.discovery import discover_strategy_modules
 from strategies_sdk.sdk import ManifestValidationError, validate_manifest
 
 
-def _sandbox_checks(repo_root: Path) -> set[str]:
-    tree = ast.parse((repo_root / "sandbox" / "entrypoint.py").read_text(encoding="utf-8"))
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "KNOWN_CHECKS" for t in node.targets):
-            return set(ast.literal_eval(node.value))
-    raise RuntimeError("sandbox/entrypoint.py does not define KNOWN_CHECKS")
+def _profile_checks(repo_root: Path, profile: str) -> set[str] | None:
+    path = repo_root / "sandbox" / "profiles" / f"{profile}.json"
+    if not path.is_file():
+        return None
+    return set(json.loads(path.read_text(encoding="utf-8"))["checks"])
 
 
 def validate_all(repo_root: Path) -> list[str]:
     errors: list[str] = []
-    sandbox = _sandbox_checks(repo_root)
-    for name in CHECK_VOCABULARY:
-        if name not in sandbox:
-            errors.append(f"platform vocabulary lists {name!r} but the sandbox cannot run it")
-
     modules = discover_strategy_modules()
     if not modules:
         errors.append("no strategy found: a strategy package must ship a strategy.marker file")
@@ -44,8 +37,17 @@ def validate_all(repo_root: Path) -> list[str]:
         if manifest.id in seen:
             errors.append(f"{module.__name__}: id {manifest.id!r} already used by {seen[manifest.id]}")
         seen[manifest.id] = module.__name__
+
+        available = _profile_checks(repo_root, manifest.sandbox_profile)
+        if available is None:
+            errors.append(f"{module.__name__}: sandbox profile {manifest.sandbox_profile!r} has no sandbox/profiles file")
+            continue
+        for check in manifest.checks:
+            if check.name not in available:
+                errors.append(f"{module.__name__}: profile {manifest.sandbox_profile!r} cannot run check {check.name!r}")
+
         checks = ", ".join(f"{c.name}{'' if c.blocking else '*'}" for c in manifest.checks)
-        print(f"ok  {manifest.id:<28} {manifest.ecosystem:<8} checks: {checks}  ({module.__name__})")
+        print(f"ok  {manifest.id:<28} {manifest.ecosystem:<8} sandbox: {manifest.sandbox_profile:<8} checks: {checks}  ({module.__name__})")
     return errors
 
 

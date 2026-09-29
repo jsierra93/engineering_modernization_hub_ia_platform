@@ -130,7 +130,9 @@ resource "aws_iam_role_policy_attachment" "execution_managed" {
 }
 
 resource "aws_ecs_task_definition" "sandbox" {
-  family                   = "${var.name_prefix}-sandbox"
+  for_each = var.sandbox_profiles
+
+  family                   = "${var.name_prefix}-sandbox-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = var.sandbox_cpu
@@ -145,7 +147,7 @@ resource "aws_ecs_task_definition" "sandbox" {
   container_definitions = jsonencode([
     {
       name      = var.sandbox_container_name
-      image     = "${aws_ecr_repository.sandbox.repository_url}:${var.sandbox_image_tag}"
+      image     = "${aws_ecr_repository.sandbox.repository_url}:${each.value.image_tag}"
       essential = true
       logConfiguration = {
         logDriver = "awslogs"
@@ -159,6 +161,6 @@ resource "aws_ecs_task_definition" "sandbox" {
   ])
 
   tags = merge(var.tags, {
-    Name = "${var.name_prefix}-sandbox"
+    Name = "${var.name_prefix}-sandbox-${each.key}"
   })
 }

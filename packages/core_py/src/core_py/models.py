@@ -122,6 +122,7 @@ class StrategyManifest(BaseModel):
     title: str
     description: str
     ecosystem: str
+    sandbox_profile: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     limits: StrategyLimits
     checks: list[CheckSpec]

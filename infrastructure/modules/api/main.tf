@@ -33,6 +33,8 @@ module "lambda" {
       BEDROCK_MODEL_ANALYSIS   = var.analysis_model_id
       MODHUB_WORKSPACE_BUCKET  = var.workspaces_bucket_name
       EVENTS_TABLE_NAME        = var.events_table_name
+
+      MODHUB_SANDBOX_TASK_DEFINITIONS = jsonencode(var.sandbox_task_definition_arns)
     },
     var.extra_environment_variables
   )
