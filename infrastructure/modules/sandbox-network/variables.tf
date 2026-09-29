@@ -12,7 +12,6 @@ variable "tags" {
 variable "aws_region" {
   description = "Region this network is created in. Used to derive a default availability zone and for the sandbox task's awslogs configuration."
   type        = string
-  default     = "us-east-1"
 }
 
 variable "availability_zone" {

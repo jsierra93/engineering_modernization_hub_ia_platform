@@ -1,13 +1,13 @@
 output "lambda_function_name" {
-  value = aws_lambda_function.agent_phase.function_name
+  value = module.lambda.function_name
 }
 
 output "lambda_function_arn" {
-  value = aws_lambda_function.agent_phase.arn
+  value = module.lambda.function_arn
 }
 
 output "lambda_role_arn" {
-  value = aws_iam_role.agent_phase_lambda.arn
+  value = module.lambda.role_arn
 }
 
 output "guardrail_id" {

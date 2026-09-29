@@ -24,43 +24,14 @@ variable "state_machine_arn" {
   type        = string
 }
 
-variable "lambda_source_dir" {
-  description = <<-EOT
-    Directory zipped (via data.archive_file) into the deployment artifact for
-    lambda api. The real Python build for services/api is being produced in
-    parallel (see PLAN.md 1.6) and is not wired yet; this defaults to a
-    placeholder stub handler shipped inside this module so the module stays
-    structurally valid on its own. Once the real Lambda package exists,
-    point this at its build output directory (e.g.
-    "../../../services/api/dist") to wire it in - no other change needed.
-  EOT
-  type        = string
-  default     = null
-}
-
 variable "lambda_package_zip_path" {
-  description = <<-EOT
-    Path to an already-built deployment zip (e.g. the output of
-    infrastructure/scripts/build_lambda.sh). When set, this is deployed
-    directly and `lambda_source_dir` / data.archive_file are skipped
-    entirely - use this for a real, dependency-bundled artifact. Leave
-    null to keep using the placeholder (or any other) source directory
-    zipped on the fly.
-  EOT
+  description = "Path to the deployment zip built by infrastructure/scripts/build_lambda.sh for api."
   type        = string
-  default     = null
-}
-
-variable "lambda_runtime" {
-  description = "Lambda runtime for lambda api. python3.14 is GA (not preview -- that's python3.15), and every direct dependency (strands-agents, pydantic, pydantic-core, boto3, moto) publishes cp314 wheels as of 2026-09-25."
-  type        = string
-  default     = "python3.14"
 }
 
 variable "lambda_architectures" {
   description = "Lambda instruction set. arm64 (Graviton2) for the same reason the sandbox Fargate task uses ARM64 in the design artifact: better price-performance. Deliberate here, not the AWS default (x86_64) left unset."
   type        = list(string)
-  default     = ["arm64"]
 }
 
 variable "lambda_handler" {
@@ -112,21 +83,19 @@ variable "log_retention_days" {
 }
 
 variable "cors_allow_origins" {
-  description = "Allowed CORS origins for the HTTP API. Tightened later once Backstage (Fase 5) has a fixed origin."
+  description = "Allowed CORS origins for the HTTP API. Empty disables CORS; never default to a wildcard."
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }
 
 variable "aws_region" {
   description = "Region used to build the analysis model's foundation-model ARN for IAM scoping (Fase 4, task 4.4-tf)."
   type        = string
-  default     = "us-east-1"
 }
 
 variable "analysis_model_id" {
   description = "Bedrock model ID resolved for ModelRole.ANALYSIS (core_py.bedrock_models) -- CLAUDE.md's one documented Bedrock exception, the objective->strategy resolver in services/api/resolver. The IAM policy is scoped to exactly this model ID, never bedrock:* across all models."
   type        = string
-  default     = "anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 variable "enable_jwt_authorizer" {

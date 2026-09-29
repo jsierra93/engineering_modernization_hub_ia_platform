@@ -11,11 +11,6 @@ resource "aws_dynamodb_table" "runs" {
   }
 
   attribute {
-    name = "status"
-    type = "S"
-  }
-
-  attribute {
     name = "requested_by"
     type = "S"
   }
@@ -23,20 +18,6 @@ resource "aws_dynamodb_table" "runs" {
   attribute {
     name = "created_at"
     type = "S"
-  }
-
-  global_secondary_index {
-    name            = "gsi_status"
-    projection_type = "ALL"
-
-    key_schema {
-      attribute_name = "status"
-      key_type       = "HASH"
-    }
-    key_schema {
-      attribute_name = "created_at"
-      key_type       = "RANGE"
-    }
   }
 
   global_secondary_index {

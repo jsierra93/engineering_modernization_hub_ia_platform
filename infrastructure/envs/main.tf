@@ -9,17 +9,14 @@ locals {
     MODHUB_CEILING_MAX_MINUTES    = "60"
   }
 
-  api_package_path         = "${path.module}/../../scripts/build/api_lambda_x86_64.zip"
-  fetch_repo_package_path  = "${path.module}/../../scripts/build/fetch_repo_lambda_x86_64.zip"
-  core_ops_package_path    = "${path.module}/../../scripts/build/core_ops_lambda_x86_64.zip"
-  fetch_doc_package_path   = "${path.module}/../../scripts/build/fetch_doc_lambda_x86_64.zip"
-  agent_phase_package_path = "${path.module}/../../scripts/build/agent_phase_lambda_x86_64.zip"
-  open_pr_package_path     = "${path.module}/../../scripts/build/open_pr_lambda_x86_64.zip"
+  api_package_path         = "${path.module}/../scripts/build/api_lambda_${var.lambda_architecture}.zip"
+  fetch_repo_package_path  = "${path.module}/../scripts/build/fetch_repo_lambda_${var.lambda_architecture}.zip"
+  core_ops_package_path    = "${path.module}/../scripts/build/core_ops_lambda_${var.lambda_architecture}.zip"
+  fetch_doc_package_path   = "${path.module}/../scripts/build/fetch_doc_lambda_${var.lambda_architecture}.zip"
+  agent_phase_package_path = "${path.module}/../scripts/build/agent_phase_lambda_${var.lambda_architecture}.zip"
+  open_pr_package_path     = "${path.module}/../scripts/build/open_pr_lambda_${var.lambda_architecture}.zip"
 
-  lambda_architectures = ["x86_64"]
-
-  analysis_model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-  code_model_id     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  lambda_architectures = [var.lambda_architecture]
 
   common_tags = {
     Project     = "engineering-modernization-hub"
@@ -29,7 +26,7 @@ locals {
 }
 
 module "persistence" {
-  source = "../../modules/persistence"
+  source = "../modules/persistence"
 
   name_prefix      = local.name_prefix
   tags             = local.common_tags
@@ -37,25 +34,25 @@ module "persistence" {
 }
 
 module "sandbox_network" {
-  source = "../../modules/sandbox-network"
+  source = "../modules/sandbox-network"
 
   name_prefix          = local.name_prefix
   tags                 = local.common_tags
   aws_region           = var.aws_region
-  sandbox_architecture = "x86_64"
+  sandbox_architecture = var.lambda_architecture
   ecr_force_delete     = true
-  sandbox_image_tag    = "v4"
+  sandbox_image_tag    = var.sandbox_image_tag
 }
 
 module "notifications" {
-  source = "../../modules/notifications"
+  source = "../modules/notifications"
 
   name_prefix = local.name_prefix
   tags        = local.common_tags
 }
 
 module "orchestration" {
-  source = "../../modules/orchestration"
+  source = "../modules/orchestration"
 
   name_prefix = local.name_prefix
   tags        = local.common_tags
@@ -74,14 +71,14 @@ module "orchestration" {
 }
 
 module "identity" {
-  source = "../../modules/identity"
+  source = "../modules/identity"
 
   name_prefix = local.name_prefix
   tags        = local.common_tags
 }
 
 module "api" {
-  source = "../../modules/api"
+  source = "../modules/api"
 
   name_prefix             = local.name_prefix
   tags                    = local.common_tags
@@ -91,7 +88,8 @@ module "api" {
   lambda_package_zip_path = local.api_package_path
   lambda_architectures    = local.lambda_architectures
   aws_region              = var.aws_region
-  analysis_model_id       = local.analysis_model_id
+  analysis_model_id       = var.analysis_model_id
+  cors_allow_origins      = var.cors_allow_origins
   workspaces_bucket_name  = module.persistence.workspaces_bucket_name
   workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
   events_table_name       = module.persistence.events_table_name
@@ -111,7 +109,7 @@ module "api" {
 }
 
 module "open_pr" {
-  source = "../../modules/open-pr"
+  source = "../modules/open-pr"
 
   name_prefix             = local.name_prefix
   tags                    = local.common_tags
@@ -125,7 +123,7 @@ module "open_pr" {
 }
 
 module "fetch_repo" {
-  source = "../../modules/fetch-repo"
+  source = "../modules/fetch-repo"
 
   name_prefix             = local.name_prefix
   tags                    = local.common_tags
@@ -136,7 +134,7 @@ module "fetch_repo" {
 }
 
 module "core_ops" {
-  source = "../../modules/core-ops"
+  source = "../modules/core-ops"
 
   name_prefix             = local.name_prefix
   tags                    = local.common_tags
@@ -152,7 +150,7 @@ module "core_ops" {
 }
 
 module "fetch_doc" {
-  source = "../../modules/fetch-doc"
+  source = "../modules/fetch-doc"
 
   name_prefix             = local.name_prefix
   tags                    = local.common_tags
@@ -161,7 +159,7 @@ module "fetch_doc" {
 }
 
 module "agent_phase" {
-  source = "../../modules/agent-phase"
+  source = "../modules/agent-phase"
 
   name_prefix             = local.name_prefix
   tags                    = local.common_tags
@@ -170,8 +168,9 @@ module "agent_phase" {
   workspaces_bucket_arn   = module.persistence.workspaces_bucket_arn
   fetch_doc_lambda_arn    = module.fetch_doc.lambda_function_arn
   fetch_doc_lambda_name   = module.fetch_doc.lambda_function_name
-  analysis_model_id       = local.analysis_model_id
-  code_model_id           = local.code_model_id
+  analysis_model_id       = var.analysis_model_id
+  code_model_id           = var.code_model_id
+  model_pricing           = var.model_pricing
   lambda_package_zip_path = local.agent_phase_package_path
   lambda_architectures    = local.lambda_architectures
 

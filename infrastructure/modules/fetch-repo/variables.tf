@@ -19,42 +19,14 @@ variable "workspaces_bucket_arn" {
   type        = string
 }
 
-variable "lambda_source_dir" {
-  description = <<-EOT
-    Directory zipped (via data.archive_file) into the deployment artifact
-    for lambda fetch_repo. The real Python build for services/fetch_repo is
-    being produced in parallel (see PLAN.md 2.2) and is not wired yet; this
-    defaults to a placeholder stub handler shipped inside this module so it
-    stays structurally valid on its own, mirroring infrastructure/modules/
-    api's pattern exactly. Once the real Lambda package exists, point this
-    at its build output directory -- no other change needed.
-  EOT
-  type        = string
-  default     = null
-}
-
 variable "lambda_package_zip_path" {
-  description = <<-EOT
-    Path to an already-built deployment zip (e.g. the output of
-    infrastructure/scripts/build_lambda.sh, once it grows a fetch_repo
-    target). When set, this is deployed directly and `lambda_source_dir` /
-    data.archive_file are skipped entirely. Leave null to keep using the
-    placeholder source directory zipped on the fly.
-  EOT
+  description = "Path to the deployment zip built by infrastructure/scripts/build_lambda.sh for fetch_repo."
   type        = string
-  default     = null
-}
-
-variable "lambda_runtime" {
-  description = "Lambda runtime for lambda fetch_repo. python3.14 is GA, matching infrastructure/modules/api."
-  type        = string
-  default     = "python3.14"
 }
 
 variable "lambda_architectures" {
   description = "Lambda instruction set. arm64 (Graviton2) is the default for production AWS deployments."
   type        = list(string)
-  default     = ["arm64"]
 }
 
 variable "lambda_handler" {

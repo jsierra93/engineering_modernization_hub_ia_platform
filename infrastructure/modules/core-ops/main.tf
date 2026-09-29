@@ -1,44 +1,44 @@
 # core_ops Lambda: deterministic core. No Bedrock permission.
 
-locals {
-  lambda_source_dir  = coalesce(var.lambda_source_dir, "${path.module}/placeholder_src")
-  use_prebuilt_zip   = var.lambda_package_zip_path != null
-  lambda_filename    = local.use_prebuilt_zip ? var.lambda_package_zip_path : data.archive_file.lambda_package[0].output_path
-  lambda_source_hash = local.use_prebuilt_zip ? filebase64sha256(var.lambda_package_zip_path) : data.archive_file.lambda_package[0].output_base64sha256
+module "lambda" {
+  source = "../lambda-function"
+
+  function_name      = "${var.name_prefix}-core-ops"
+  tags               = var.tags
+  package_zip_path   = var.lambda_package_zip_path
+  handler            = var.lambda_handler
+  architectures      = var.lambda_architectures
+  timeout_seconds    = var.lambda_timeout_seconds
+  memory_mb          = var.lambda_memory_mb
+  log_retention_days = var.log_retention_days
+
+  environment = merge(
+    {
+      RUNS_TABLE_NAME   = var.runs_table_name
+      EVENTS_TABLE_NAME = var.events_table_name
+    },
+    var.extra_environment_variables
+  )
 }
 
-data "archive_file" "lambda_package" {
-  count = local.use_prebuilt_zip ? 0 : 1
-
-  type        = "zip"
-  source_dir  = local.lambda_source_dir
-  output_path = "${path.module}/build/core_ops_lambda.zip"
+moved {
+  from = aws_iam_role.core_ops_lambda
+  to   = module.lambda.aws_iam_role.this
 }
 
-data "aws_iam_policy_document" "lambda_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
-  }
+moved {
+  from = aws_iam_role_policy_attachment.lambda_basic_logs
+  to   = module.lambda.aws_iam_role_policy_attachment.basic_logs
 }
 
-resource "aws_iam_role" "core_ops_lambda" {
-  name               = "${var.name_prefix}-core-ops-lambda-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
-
-  tags = merge(var.tags, {
-    Name = "${var.name_prefix}-core-ops-lambda-role"
-  })
+moved {
+  from = aws_cloudwatch_log_group.core_ops_lambda
+  to   = module.lambda.aws_cloudwatch_log_group.this
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_basic_logs" {
-  role       = aws_iam_role.core_ops_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+moved {
+  from = aws_lambda_function.core_ops
+  to   = module.lambda.aws_lambda_function.this
 }
 
 data "aws_iam_policy_document" "core_ops_lambda_scope" {
@@ -98,41 +98,6 @@ data "aws_iam_policy_document" "core_ops_lambda_scope" {
 
 resource "aws_iam_role_policy" "core_ops_lambda_scope" {
   name   = "${var.name_prefix}-core-ops-lambda-scope"
-  role   = aws_iam_role.core_ops_lambda.id
+  role   = module.lambda.role_id
   policy = data.aws_iam_policy_document.core_ops_lambda_scope.json
-}
-
-resource "aws_cloudwatch_log_group" "core_ops_lambda" {
-  name              = "/aws/lambda/${var.name_prefix}-core-ops"
-  retention_in_days = var.log_retention_days
-
-  tags = var.tags
-}
-
-resource "aws_lambda_function" "core_ops" {
-  function_name    = "${var.name_prefix}-core-ops"
-  role             = aws_iam_role.core_ops_lambda.arn
-  handler          = var.lambda_handler
-  runtime          = var.lambda_runtime
-  architectures    = var.lambda_architectures
-  timeout          = var.lambda_timeout_seconds
-  memory_size      = var.lambda_memory_mb
-  filename         = local.lambda_filename
-  source_code_hash = local.lambda_source_hash
-
-  environment {
-    variables = merge(
-      {
-        RUNS_TABLE_NAME   = var.runs_table_name
-        EVENTS_TABLE_NAME = var.events_table_name
-      },
-      var.extra_environment_variables
-    )
-  }
-
-  tags = merge(var.tags, {
-    Name = "${var.name_prefix}-core-ops"
-  })
-
-  depends_on = [aws_cloudwatch_log_group.core_ops_lambda]
 }

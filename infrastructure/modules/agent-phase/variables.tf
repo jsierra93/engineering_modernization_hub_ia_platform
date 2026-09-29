@@ -43,8 +43,15 @@ variable "create_guardrail" {
 }
 
 variable "aws_region" {
-  type    = string
-  default = "us-east-1"
+  type = string
+}
+
+variable "model_pricing" {
+  description = "USD per 1k tokens for each configured Bedrock model ID, keyed exactly as configured in analysis_model_id / code_model_id. Passed to the Lambda as MODHUB_MODEL_PRICING (core_py.pricing)."
+  type = map(object({
+    input_usd_per_1k  = number
+    output_usd_per_1k = number
+  }))
 }
 
 variable "lambda_package_zip_path" {
@@ -52,15 +59,9 @@ variable "lambda_package_zip_path" {
   type        = string
 }
 
-variable "lambda_runtime" {
-  type    = string
-  default = "python3.14"
-}
-
 variable "lambda_architectures" {
   description = "Lambda CPU architecture. arm64 (Graviton2) is the default for production AWS deployments."
   type        = list(string)
-  default     = ["arm64"]
 }
 
 variable "lambda_handler" {

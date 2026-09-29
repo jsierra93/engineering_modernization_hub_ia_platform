@@ -1,26 +1,43 @@
 # open_pr Lambda: reads the GitHub token, the run and its workspace, nothing else.
 
-data "aws_iam_policy_document" "lambda_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
+module "lambda" {
+  source = "../lambda-function"
 
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
+  function_name      = "${var.name_prefix}-open-pr"
+  role_name          = "${var.name_prefix}-open-pr-role"
+  tags               = var.tags
+  package_zip_path   = var.lambda_package_zip_path
+  handler            = "open_pr.handler.handler"
+  architectures      = var.lambda_architectures
+  timeout_seconds    = var.lambda_timeout_seconds
+  memory_mb          = var.lambda_memory_mb
+  log_retention_days = var.log_retention_days
+
+  environment = {
+    MODHUB_WORKSPACE_BUCKET = var.workspaces_bucket_name
+    GITHUB_TOKEN_SECRET_ARN = var.github_token_secret_arn
+    RUNS_TABLE_NAME         = var.runs_table_name
   }
 }
 
-resource "aws_iam_role" "open_pr" {
-  name               = "${var.name_prefix}-open-pr-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
-  tags               = var.tags
+moved {
+  from = aws_iam_role.open_pr
+  to   = module.lambda.aws_iam_role.this
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_basic_logs" {
-  role       = aws_iam_role.open_pr.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+moved {
+  from = aws_iam_role_policy_attachment.lambda_basic_logs
+  to   = module.lambda.aws_iam_role_policy_attachment.basic_logs
+}
+
+moved {
+  from = aws_cloudwatch_log_group.open_pr
+  to   = module.lambda.aws_cloudwatch_log_group.this
+}
+
+moved {
+  from = aws_lambda_function.open_pr
+  to   = module.lambda.aws_lambda_function.this
 }
 
 data "aws_iam_policy_document" "open_pr_scope" {
@@ -61,35 +78,6 @@ data "aws_iam_policy_document" "open_pr_scope" {
 
 resource "aws_iam_role_policy" "open_pr_scope" {
   name   = "${var.name_prefix}-open-pr-scope"
-  role   = aws_iam_role.open_pr.id
+  role   = module.lambda.role_id
   policy = data.aws_iam_policy_document.open_pr_scope.json
-}
-
-resource "aws_cloudwatch_log_group" "open_pr" {
-  name              = "/aws/lambda/${var.name_prefix}-open-pr"
-  retention_in_days = var.log_retention_days
-  tags              = var.tags
-}
-
-resource "aws_lambda_function" "open_pr" {
-  function_name    = "${var.name_prefix}-open-pr"
-  role             = aws_iam_role.open_pr.arn
-  handler          = "open_pr.handler.handler"
-  runtime          = var.lambda_runtime
-  architectures    = var.lambda_architectures
-  timeout          = var.lambda_timeout_seconds
-  memory_size      = var.lambda_memory_mb
-  filename         = var.lambda_package_zip_path
-  source_code_hash = filebase64sha256(var.lambda_package_zip_path)
-
-  environment {
-    variables = {
-      MODHUB_WORKSPACE_BUCKET = var.workspaces_bucket_name
-      GITHUB_TOKEN_SECRET_ARN = var.github_token_secret_arn
-      RUNS_TABLE_NAME         = var.runs_table_name
-    }
-  }
-
-  tags       = var.tags
-  depends_on = [aws_cloudwatch_log_group.open_pr]
 }

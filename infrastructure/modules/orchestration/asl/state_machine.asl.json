@@ -5,6 +5,7 @@
     "FetchRepo": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${fetch_repo_lambda_arn}",
         "Payload": {
@@ -94,6 +95,7 @@
     "RecordBaselineBlocked": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -106,7 +108,7 @@
           "checks": {}
         }
       },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
@@ -175,21 +177,22 @@
 
     "MarkBaselineLintClean": {
       "Type": "Pass",
-      "Result": true,
-      "ResultPath": "$.baseline_lint_clean",
+      "Result": { "lint": true },
+      "ResultPath": "$.baseline_clean",
       "Next": "DiscoveryPlan"
     },
 
     "MarkBaselineLintDirty": {
       "Type": "Pass",
-      "Result": false,
-      "ResultPath": "$.baseline_lint_clean",
+      "Result": { "lint": false },
+      "ResultPath": "$.baseline_clean",
       "Next": "DiscoveryPlan"
     },
 
     "DiscoveryPlan": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${agent_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${agent_phase_lambda_arn}",
         "Payload": {
@@ -228,6 +231,7 @@
     "RecordDiscoveryPlanSpend": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -290,6 +294,7 @@
     "RecordInfeasibleVerdict": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -303,7 +308,7 @@
           "checks": {}
         }
       },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
@@ -325,6 +330,7 @@
     "RecordPlan": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -359,6 +365,7 @@
     "NotifyApprovalPending": {
       "Type": "Task",
       "Resource": "arn:aws:states:::sqs:sendMessage",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "QueueUrl": "${notifications_queue_url}",
         "MessageBody": {
@@ -412,6 +419,7 @@
     "Implement": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${agent_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${agent_phase_lambda_arn}",
         "Payload": {
@@ -453,6 +461,7 @@
     "RecordImplementSpend": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -537,6 +546,7 @@
         }
       ],
       "TimeoutSeconds": ${sandbox_task_timeout_seconds},
+      "ResultSelector": { "exit_code.$": "$.Containers[0].ExitCode" },
       "ResultPath": "$.verify_result",
       "Catch": [
         {
@@ -568,6 +578,7 @@
     "Fix": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${agent_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${agent_phase_lambda_arn}",
         "Payload": {
@@ -611,6 +622,7 @@
     "RecordFixSpend": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -677,6 +689,7 @@
     "RecordUnrecoverableVerdict": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -689,7 +702,7 @@
           "checks": {}
         }
       },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
@@ -712,6 +725,7 @@
     "RecordApprovalTimeout": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -724,7 +738,7 @@
           "checks": {}
         }
       },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
@@ -745,6 +759,7 @@
     "ComputeBudgetExhaustedVerdict": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -756,7 +771,7 @@
           "checks": {}
         }
       },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
@@ -778,6 +793,7 @@
     "RecordStuckRun": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -794,13 +810,27 @@
           "BackoffRate": 2
         }
       ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.stuck_error",
+          "Next": "ExecutionFailed"
+        }
+      ],
       "ResultPath": "$.stuck_result",
       "End": true
+    },
+
+    "ExecutionFailed": {
+      "Type": "Fail",
+      "Error": "RunStateNotRecorded",
+      "Cause": "The terminal state of the run could not be written."
     },
 
     "ComputeExhaustedVerdict": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -811,10 +841,12 @@
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
           "final_junit_key.$": "$.implement_result.junit_key",
           "fix_iterations_exhausted_without_pass": true,
-          "checks": { "install": true, "unit_tests": false }
+          "check_evidence": {
+            "unit_tests": { "error.$": "$.verify_error" }
+          }
         }
       },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
@@ -870,12 +902,13 @@
         }
       ],
       "TimeoutSeconds": ${sandbox_task_timeout_seconds},
+      "ResultSelector": { "exit_code.$": "$.Containers[0].ExitCode" },
       "ResultPath": "$.lint_result",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.lint_error",
-          "Next": "CheckBaselineLint"
+          "Next": "ComputeVerdictLintFailed"
         }
       ],
       "Next": "ComputeFinalVerdict"
@@ -884,6 +917,7 @@
     "ComputeFinalVerdict": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -893,10 +927,14 @@
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
           "final_junit_key.$": "$.implement_result.junit_key",
-          "checks": { "install": true, "unit_tests": true, "lint": true }
+          "baseline_clean.$": "$.baseline_clean",
+          "check_evidence": {
+            "unit_tests": { "exit_code.$": "$.verify_result.exit_code" },
+            "lint": { "exit_code.$": "$.lint_result.exit_code" }
+          }
         }
       },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
@@ -913,23 +951,12 @@
       ],
       "ResultPath": "$.verdict_result",
       "End": true
-    },
-
-    "CheckBaselineLint": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.baseline_lint_clean",
-          "BooleanEquals": true,
-          "Next": "ComputeVerdictLintFailed"
-        }
-      ],
-      "Default": "ComputeVerdictLintUnattributable"
     },
 
     "ComputeVerdictLintFailed": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
@@ -939,44 +966,14 @@
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
           "final_junit_key.$": "$.implement_result.junit_key",
-          "checks": { "install": true, "unit_tests": true, "lint": false }
+          "baseline_clean.$": "$.baseline_clean",
+          "check_evidence": {
+            "unit_tests": { "exit_code.$": "$.verify_result.exit_code" },
+            "lint": { "error.$": "$.lint_error" }
+          }
         }
       },
-            "Catch": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.verdict_error",
-          "Next": "RecordStuckRun"
-        }
-      ],
-      "Retry": [
-        {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "ResultPath": "$.verdict_result",
-      "End": true
-    },
-
-"ComputeVerdictLintUnattributable": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "${core_ops_lambda_arn}",
-        "Payload": {
-          "action": "compute_verdict",
-          "iteration.$": "$.iteration",
-          "run_id.$": "$.run_id",
-          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
-          "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
-          "final_junit_key.$": "$.implement_result.junit_key",
-          "checks": { "install": true, "unit_tests": true }
-        }
-      },
-            "Catch": [
+      "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",

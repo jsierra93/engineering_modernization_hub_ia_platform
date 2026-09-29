@@ -8,19 +8,12 @@ variable "tags" {
 }
 
 variable "lambda_package_zip_path" {
-  description = "Path to the built deployment zip (infrastructure/scripts/build_lambda.sh ... fetch_doc). Unlike fetch-repo/api, this module has no placeholder source -- the real handler already exists (PLAN.md 3.6), so this is required."
+  description = "Path to the built deployment zip (infrastructure/scripts/build_lambda.sh ... fetch_doc)."
   type        = string
 }
 
-variable "lambda_runtime" {
-  type    = string
-  default = "python3.14"
-}
-
 variable "lambda_architectures" {
-  description = "Lambda CPU architecture. arm64 (Graviton2) is the default for production AWS deployments."
-  type        = list(string)
-  default     = ["arm64"]
+  type = list(string)
 }
 
 variable "lambda_handler" {

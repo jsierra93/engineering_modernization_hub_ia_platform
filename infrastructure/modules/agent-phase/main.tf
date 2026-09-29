@@ -17,7 +17,7 @@ locals {
   )
 
   guardrail_id      = var.create_guardrail ? aws_bedrock_guardrail.prompt_attack[0].guardrail_id : null
-  guardrail_version = var.create_guardrail ? aws_bedrock_guardrail.prompt_attack[0].version : null
+  guardrail_version = var.create_guardrail ? aws_bedrock_guardrail_version.prompt_attack[0].version : null
 }
 
 resource "aws_bedrock_guardrail" "prompt_attack" {
@@ -41,30 +41,69 @@ resource "aws_bedrock_guardrail" "prompt_attack" {
   })
 }
 
-data "aws_iam_policy_document" "lambda_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
+# The guardrail resource itself only exposes DRAFT; a numbered version is immutable, so the Lambda never runs against an unpublished configuration.
+resource "aws_bedrock_guardrail_version" "prompt_attack" {
+  count = var.create_guardrail ? 1 : 0
 
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
+  guardrail_arn = aws_bedrock_guardrail.prompt_attack[0].guardrail_arn
+  description   = "Published by Terraform for ${var.name_prefix}"
+  skip_destroy  = true
+
+  lifecycle {
+    replace_triggered_by = [aws_bedrock_guardrail.prompt_attack[0]]
   }
 }
 
-resource "aws_iam_role" "agent_phase_lambda" {
-  name               = "${var.name_prefix}-agent-phase-lambda-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+module "lambda" {
+  source = "../lambda-function"
 
-  tags = merge(var.tags, {
-    Name = "${var.name_prefix}-agent-phase-lambda-role"
-  })
+  function_name      = "${var.name_prefix}-agent-phase"
+  tags               = var.tags
+  package_zip_path   = var.lambda_package_zip_path
+  handler            = var.lambda_handler
+  architectures      = var.lambda_architectures
+  timeout_seconds    = var.lambda_timeout_seconds
+  memory_mb          = var.lambda_memory_mb
+  log_retention_days = var.log_retention_days
+
+  environment = merge(
+    {
+      MODHUB_WORKSPACE_BUCKET        = var.workspaces_bucket_name
+      MODHUB_FETCH_DOC_FUNCTION_NAME = var.fetch_doc_lambda_name
+      BEDROCK_MODEL_ANALYSIS         = var.analysis_model_id
+      MODHUB_MODEL_PRICING           = jsonencode(var.model_pricing)
+    },
+    var.code_model_id == null ? {} : {
+      BEDROCK_MODEL_CODE = var.code_model_id
+    },
+    var.create_guardrail ? {
+      MODHUB_BEDROCK_GUARDRAIL_ID      = local.guardrail_id
+      MODHUB_BEDROCK_GUARDRAIL_VERSION = local.guardrail_version
+      } : {
+      MODHUB_GUARDRAIL_OPTIONAL = "true"
+    },
+    var.extra_environment_variables
+  )
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_basic_logs" {
-  role       = aws_iam_role.agent_phase_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+moved {
+  from = aws_iam_role.agent_phase_lambda
+  to   = module.lambda.aws_iam_role.this
+}
+
+moved {
+  from = aws_iam_role_policy_attachment.lambda_basic_logs
+  to   = module.lambda.aws_iam_role_policy_attachment.basic_logs
+}
+
+moved {
+  from = aws_cloudwatch_log_group.agent_phase_lambda
+  to   = module.lambda.aws_cloudwatch_log_group.this
+}
+
+moved {
+  from = aws_lambda_function.agent_phase
+  to   = module.lambda.aws_lambda_function.this
 }
 
 data "aws_iam_policy_document" "agent_phase_lambda_scope" {
@@ -118,53 +157,15 @@ data "aws_iam_policy_document" "agent_phase_lambda_scope" {
 
 resource "aws_iam_role_policy" "agent_phase_lambda_scope" {
   name   = "${var.name_prefix}-agent-phase-lambda-scope"
-  role   = aws_iam_role.agent_phase_lambda.id
+  role   = module.lambda.role_id
   policy = data.aws_iam_policy_document.agent_phase_lambda_scope.json
-}
 
-resource "aws_cloudwatch_log_group" "agent_phase_lambda" {
-  name              = "/aws/lambda/${var.name_prefix}-agent-phase"
-  retention_in_days = var.log_retention_days
-
-  tags = var.tags
-}
-
-resource "aws_lambda_function" "agent_phase" {
-  function_name    = "${var.name_prefix}-agent-phase"
-  role             = aws_iam_role.agent_phase_lambda.arn
-  handler          = var.lambda_handler
-  runtime          = var.lambda_runtime
-  architectures    = var.lambda_architectures
-  timeout          = var.lambda_timeout_seconds
-  memory_size      = var.lambda_memory_mb
-  filename         = var.lambda_package_zip_path
-  source_code_hash = filebase64sha256(var.lambda_package_zip_path)
-
-  environment {
-    variables = merge(
-      {
-        MODHUB_WORKSPACE_BUCKET        = var.workspaces_bucket_name
-        MODHUB_FETCH_DOC_FUNCTION_NAME = var.fetch_doc_lambda_name
-        BEDROCK_MODEL_ANALYSIS         = var.analysis_model_id
-      },
-      var.code_model_id == null ? {} : {
-        BEDROCK_MODEL_CODE = var.code_model_id
-      },
-      var.create_guardrail ? {
-        MODHUB_BEDROCK_GUARDRAIL_ID      = local.guardrail_id
-        MODHUB_BEDROCK_GUARDRAIL_VERSION = local.guardrail_version
-        } : {
-        MODHUB_GUARDRAIL_OPTIONAL = "true"
-      },
-      var.extra_environment_variables
-    )
+  lifecycle {
+    precondition {
+      condition     = alltrue([for id in local.model_ids : contains(keys(var.model_pricing), id)])
+      error_message = "Every configured Bedrock model needs an entry in model_pricing -- an unpriced model would fail the first phase that spends budget."
+    }
   }
-
-  tags = merge(var.tags, {
-    Name = "${var.name_prefix}-agent-phase"
-  })
-
-  depends_on = [aws_cloudwatch_log_group.agent_phase_lambda]
 }
 
 resource "aws_cloudwatch_log_group" "bedrock_invocations" {

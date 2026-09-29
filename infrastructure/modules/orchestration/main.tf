@@ -12,6 +12,8 @@ locals {
     sandbox_assign_public_ip     = var.sandbox_assign_public_ip ? "ENABLED" : "DISABLED"
     approval_timeout_seconds     = var.approval_timeout_seconds
     sandbox_task_timeout_seconds = var.sandbox_task_timeout_seconds
+    agent_task_timeout_seconds   = var.agent_task_timeout_seconds
+    lambda_task_timeout_seconds  = var.lambda_task_timeout_seconds
     fetch_repo_lambda_arn        = var.fetch_repo_lambda_arn
     agent_phase_lambda_arn       = var.agent_phase_lambda_arn
     core_ops_lambda_arn          = var.core_ops_lambda_arn

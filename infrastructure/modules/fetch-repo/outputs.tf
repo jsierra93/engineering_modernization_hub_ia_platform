@@ -1,16 +1,16 @@
 output "lambda_function_name" {
   description = "Name of the fetch_repo Lambda function."
-  value       = aws_lambda_function.fetch_repo.function_name
+  value       = module.lambda.function_name
 }
 
 output "lambda_function_arn" {
   description = "ARN of the fetch_repo Lambda function."
-  value       = aws_lambda_function.fetch_repo.arn
+  value       = module.lambda.function_arn
 }
 
 output "lambda_role_arn" {
   description = "ARN of the fetch_repo Lambda's execution role."
-  value       = aws_iam_role.fetch_repo_lambda.arn
+  value       = module.lambda.role_arn
 }
 
 output "github_token_secret_arn" {

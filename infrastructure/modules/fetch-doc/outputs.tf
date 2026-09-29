@@ -1,11 +1,11 @@
 output "lambda_function_name" {
-  value = aws_lambda_function.fetch_doc.function_name
+  value = module.lambda.function_name
 }
 
 output "lambda_function_arn" {
-  value = aws_lambda_function.fetch_doc.arn
+  value = module.lambda.function_arn
 }
 
 output "lambda_role_arn" {
-  value = aws_iam_role.fetch_doc_lambda.arn
+  value = module.lambda.role_arn
 }

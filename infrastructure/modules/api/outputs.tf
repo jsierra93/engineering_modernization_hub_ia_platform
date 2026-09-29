@@ -5,17 +5,17 @@ output "api_endpoint" {
 
 output "lambda_function_name" {
   description = "Name of the api Lambda function."
-  value       = aws_lambda_function.api.function_name
+  value       = module.lambda.function_name
 }
 
 output "lambda_function_arn" {
   description = "ARN of the api Lambda function."
-  value       = aws_lambda_function.api.arn
+  value       = module.lambda.function_arn
 }
 
 output "lambda_role_arn" {
   description = "ARN of the api Lambda's execution role."
-  value       = aws_iam_role.api_lambda.arn
+  value       = module.lambda.role_arn
 }
 
 output "http_api_id" {
