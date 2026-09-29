@@ -1,3 +1,8 @@
+/*
+ * Long-polls the SQS notifications queue and turns each message into a Backstage notification and signal.
+ * A message is deleted only after both were emitted.
+ */
+
 import {
   DeleteMessageCommand,
   ReceiveMessageCommand,
@@ -15,7 +20,6 @@ type Options = {
   logger: LoggerService;
   notifications?: NotificationService;
   signals?: SignalsService;
-  /** Injected in tests; defaults to a real client using the ambient chain. */
   client?: SQSClient;
 };
 
@@ -25,14 +29,6 @@ type QueueMessage = {
   plan_hash?: string;
 };
 
-/**
- * Long-polls the notifications queue Step Functions writes to, turns each
- * message into a Backstage notification plus a signal, and deletes it.
- *
- * Deleting only after both were emitted is deliberate: a message redelivered
- * after a crash is a duplicate notification, which is recoverable, whereas
- * deleting first would silently lose an approval request.
- */
 export class NotificationsConsumer {
   private readonly client: SQSClient;
   private stopped = false;

@@ -10,18 +10,6 @@ import {
 import { useApi, alertApiRef } from '@backstage/core-plugin-api';
 import { modhubApiRef } from '../../apis';
 
-/**
- * Fase 5, task 5.3's "formulario de solicitud." Implemented as a plugin
- * dialog calling POST /modhub/v1/runs directly (via modhub-backend),
- * rather than a Scaffolder template/custom action -- a deliberate scope
- * cut, not an oversight: a Scaffolder action runs server-side under the
- * scaffolder-backend's OWN identity, and forwarding the initiator's raw
- * Cognito token through a scaffolder action requires a custom field
- * extension plus non-trivial identity plumbing that doesn't demonstrate
- * any control this dialog doesn't already exercise (the same
- * modhub-backend proxy, the same JWT, the same API). See the session's
- * gap-analysis note for the full reasoning.
- */
 export interface CreateRunDialogProps {
   open: boolean;
   onClose: () => void;

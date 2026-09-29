@@ -1,19 +1,5 @@
-"""Bedrock Guardrails applied to untrusted content only (CLAUDE.md
-invariant #9, Layer 2).
-
-Attaching the guardrail to the model invocation itself -- the obvious
-wiring, and what this module replaces -- screens the *whole* turn. A
-PROMPT_ATTACK filter at HIGH strength reads the platform's own imperative
-instructions to the agent ("implement this plan", "writes outside your
-scope will be denied") as an attempted prompt attack and blocks the call:
-the phase then returns zero tokens and an empty result. That is a false
-positive on trusted input, and it silently costs the run its entire
-implement phase.
-
-The filter's actual job is to screen what comes from the repository or a
-fetched document. Calling ApplyGuardrail on exactly that content, and
-nothing else, is both the correct scope and the one the design document
-describes.
+"""Bedrock Guardrails applied only to untrusted content (invariant 9).
+A missing configuration fails the phase unless explicitly opted out.
 """
 
 from __future__ import annotations
@@ -27,8 +13,7 @@ GUARDRAIL_OPTIONAL_ENV = "MODHUB_GUARDRAIL_OPTIONAL"
 
 
 class GuardrailNotConfiguredError(Exception):
-    """No guardrail id, and no explicit opt-out. Fails the phase rather
-    than running a Layer-2 control that silently is not there."""
+    pass
 
 
 class UntrustedContentBlocked(Exception):
@@ -47,16 +32,6 @@ class Guardrail:
 
     @classmethod
     def from_env(cls, *, client: Any = None, region_name: str | None = None) -> Guardrail | None:
-        """Absent configuration is a failure, not a mode.
-
-        Returning None when the variable is missing made Layer 2 disappear
-        without a trace: `screened()` skipped the filter and every run
-        looked normal. Invariant #9 puts Guardrails in front of untrusted
-        content, so a deployment that lost the variable is misconfigured
-        and must say so -- unless it opted out explicitly, which is what
-        the local env does, since Guardrails is a Bedrock control-plane
-        API the emulator does not provide."""
-
         if os.environ.get(GUARDRAIL_OPTIONAL_ENV, "").lower() in ("1", "true", "yes"):
             return None
 
@@ -77,8 +52,6 @@ class Guardrail:
         return self._client
 
     def screen(self, content: str, *, source: str) -> None:
-        """Raise UntrustedContentBlocked if the guardrail rejects `content`."""
-
         response = self._bedrock().apply_guardrail(
             guardrailIdentifier=self._id,
             guardrailVersion=self._version,

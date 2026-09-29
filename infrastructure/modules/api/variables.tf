@@ -131,8 +131,8 @@ variable "analysis_model_id" {
 
 variable "enable_jwt_authorizer" {
   description = "Task 4.2-tf: require a valid Cognito JWT on every route. False for development, true for production backed by real Cognito."
-  type    = bool
-  default = false
+  type        = bool
+  default     = false
 }
 
 variable "jwt_issuer" {

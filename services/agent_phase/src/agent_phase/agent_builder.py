@@ -1,20 +1,5 @@
-"""Assembles a real Strands Agent for one phase invocation.
-
-Every choice here is one CLAUDE.md already made, not a free decision this
-module gets to revisit:
-  - temperature=0 (invariant: reproducibility during the live defense)
-  - max_tokens comes from the strategy's StrategyModelLimits, never chosen
-    by the agent itself
-  - the model ID comes from core_py.bedrock_models.resolve_model_id, never
-    hardcoded here
-  - the policy gate (WritableScopeGate) is always attached; there is no
-    code path that constructs an Agent without one
-  - the system prompt always includes the untrusted-content clause
-
-The Bedrock Guardrail is deliberately NOT a constructor kwarg on
-`BedrockModel`: see `guardrail.py` for why screening the whole turn
-blocks the platform's own instructions. It is handed to `build_tools`
-instead, which applies it to repo and document content only.
+"""Builds the Strands agent for one phase: temperature 0, strategy max_tokens, policy gate always attached.
+The guardrail is applied to untrusted content in the tools, not to the whole turn.
 """
 
 from __future__ import annotations

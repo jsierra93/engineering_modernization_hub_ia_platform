@@ -1,25 +1,6 @@
-/**
- * Fase 5, task 5.2. This router forwards a bearer token to modhub/v1 on
- * every request. It never holds or asserts a service-level credential of
- * its own for the REAL path -- see the design artifact's "modhub-backend
- * ... no afirma identidades" -- the frontend's own Cognito access token
- * (obtained from the `oidc` auth provider, NOT Backstage's internal
- * session token) is what normally travels here as a plain
- * `Authorization: Bearer <token>` header.
- *
- * Local-dev exception, `devToken` (config key `modhub.devToken`,
- * backend-only, 2026-09-26): Floci's Cognito emulation doesn't expose an
- * `authorization_endpoint` in its OIDC discovery document, so the real
- * browser popup flow can never complete against it -- confirmed
- * empirically, not a hypothetical, and a frontend-side workaround (a
- * manually-pasted token gated by a `@visibility frontend` config flag)
- * also proved unreliable in practice. Backend config has no visibility
- * restriction at all, so this is the more robust place to short-circuit:
- * when `modhub.devToken` is set, EVERY request uses it, regardless of
- * whatever the browser sent -- see start-local-env.sh's own printed curl
- * command for how to mint a fresh one against Floci. Delete this config
- * key once pointed at real AWS and the real per-user Cognito token takes
- * over automatically -- no code change needed.
+/*
+ * Proxy from Backstage to modhub/v1: forwards the caller's bearer token verbatim, adding only x-trace-id.
+ * With modhub.devToken set (local only) every request uses that token instead.
  */
 
 import { LoggerService } from '@backstage/backend-plugin-api';
@@ -34,11 +15,6 @@ export interface RouterOptions {
   devToken?: string;
 }
 
-/**
- * Extract or generate trace_id for distributed tracing.
- * Follows W3C Trace Context convention (x-trace-id header).
- * If x-trace-id header exists, use it; otherwise generate new UUID.
- */
 function getOrGenerateTraceId(req: express.Request): string {
   return req.header('x-trace-id') || randomUUID();
 }
@@ -62,10 +38,6 @@ export async function createRouter(
   const router = Router();
   router.use(express.json());
 
-  /**
-   * Middleware: Extract or generate trace_id and attach to request
-   * for propagation to downstream services.
-   */
   router.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
     const traceId = getOrGenerateTraceId(req);
     (req as any).traceId = traceId;
@@ -73,11 +45,6 @@ export async function createRouter(
     logger.info(`[trace_id=${traceId}] ${req.method} ${req.path}`);
     next();
   });
-
-  // Every route below is a thin, verbatim proxy onto modhub/v1's own
-  // routes (packages/contracts/openapi.yaml) -- this plugin adds no
-  // request/response shape of its own, so the frontend's ModhubClient
-  // (plugins/modhub) and a direct call to modhub/v1 behave identically.
 
   router.post('/runs', async (req, res) => {
     const traceId = (req as any).traceId;

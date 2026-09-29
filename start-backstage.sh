@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 #
 # Starts Backstage against either environment:
 #
@@ -52,7 +53,6 @@ py_get() { python3 -c "import json,sys; print(json.loads(sys.argv[1])['$1']['val
 
 AWS_SHAPED_ENDPOINT="$(py_get api_endpoint)"
 if [[ "${TARGET}" == "local" ]]; then
-  # Floci serves API Gateway under a path, not the AWS-shaped hostname.
   API_ID="$(echo "${AWS_SHAPED_ENDPOINT}" | sed -E 's#https://([^.]+)\..*#\1#')"
   API_BASE_URL="http://localhost:4566/_aws/execute-api/${API_ID}/\$default"
 else
@@ -77,10 +77,7 @@ kwargs = {"region_name": region}
 if endpoint:
     kwargs["endpoint_url"] = endpoint
 c = boto3.client("cognito-idp", **kwargs)
-# Terraform creates the user in FORCE_CHANGE_PASSWORD; make it usable.
 c.admin_set_user_password(UserPoolId=pool_id, Username=username, Password=password, Permanent=True)
-# USER_PASSWORD_AUTH, not the admin flow: the cli client is public and only
-# enables the non-admin flows a real CLI user would have.
 auth = c.initiate_auth(
     ClientId=client_id, AuthFlow="USER_PASSWORD_AUTH",
     AuthParameters={"USERNAME": username, "PASSWORD": password},
@@ -112,9 +109,6 @@ step "Starting Backstage against '${TARGET}'"
 export MODHUB_API_BASE_URL="${API_BASE_URL}"
 export MODHUB_NOTIFICATIONS_QUEUE_URL="${NOTIFICATIONS_QUEUE_URL}"
 export MODHUB_AWS_REGION="${COGNITO_REGION}"
-# Both targets use the fixed token while the browser OIDC flow is blocked
-# (PLAN.md 5.6). The AUTH_OIDC_* exports below stay, so flipping back is
-# just USE_DEV_TOKEN in plugins/modhub/src/apis.ts.
 export MODHUB_DEV_TOKEN="${JWT}"
 echo "  auth: fixed dev token (browser OIDC pending -- PLAN.md 5.6)"
 export AUTH_SESSION_SECRET="${AUTH_SESSION_SECRET:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"

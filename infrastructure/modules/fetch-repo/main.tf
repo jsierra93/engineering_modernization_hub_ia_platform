@@ -1,26 +1,4 @@
-# infrastructure/modules/fetch-repo
-#
-# Task 2.2-tf (PLAN.md). lambda fetch_repo downloads a repo tarball at an
-# exact commit SHA, sanitizes it (extension/size checks -- Python side,
-# services/fetch_repo, not here) and writes the result to S3 under ws/v0.
-# This module provisions the Lambda + its least-privilege role, modeled on
-# infrastructure/modules/api's lambda_source_dir / lambda_package_zip_path /
-# lambda_architectures shape, plus the GitHub token's Secrets Manager
-# container.
-#
-# IAM for this Lambda's execution role is scoped to exactly:
-#   - s3:PutObject / s3:GetObject on the workspaces bucket, prefixed to
-#     "ws/*" only -- never the whole bucket
-#   - secretsmanager:GetSecretValue on exactly one secret (the GitHub token)
-# Nothing else. No Bedrock, ever.
-#
-# The GitHub token secret container is created here with an obviously-fake
-# placeholder value. The real value is set by a human, out-of-band, via
-# `aws secretsmanager put-secret-value` or the console -- never through
-# Terraform, never committed to git (see CLAUDE.md's "Never commit anything
-# that could hold a credential"). `ignore_changes` on secret_string stops a
-# later `terraform apply` from ever overwriting a real value a human has
-# since set.
+# fetch_repo Lambda and the GitHub token secret container (value is set out of band).
 
 locals {
   lambda_source_dir  = coalesce(var.lambda_source_dir, "${path.module}/placeholder_src")
@@ -37,7 +15,6 @@ data "archive_file" "lambda_package" {
   output_path = "${path.module}/build/fetch_repo_lambda.zip"
 }
 
-# Container only -- the real value is never set here. See file header.
 resource "aws_secretsmanager_secret" "github_token" {
   name        = "${var.name_prefix}-fetch-repo-github-token"
   description = "GitHub token used by lambda fetch_repo. Real value set out-of-band by a human -- NEVER via Terraform or git."
@@ -48,10 +25,7 @@ resource "aws_secretsmanager_secret" "github_token" {
 }
 
 resource "aws_secretsmanager_secret_version" "github_token" {
-  secret_id = aws_secretsmanager_secret.github_token.id
-  # Obviously-fake placeholder -- satisfies the resource's required
-  # argument only. A human sets the real token value out-of-band; Terraform
-  # must never see it, so this attribute is excluded from future applies.
+  secret_id     = aws_secretsmanager_secret.github_token.id
   secret_string = "REPLACE_OUT_OF_BAND_NOT_A_REAL_TOKEN"
 
   lifecycle {
@@ -93,7 +67,6 @@ data "aws_iam_policy_document" "fetch_repo_lambda_scope" {
       "s3:PutObject",
       "s3:GetObject",
     ]
-    # Scoped to the ws/ prefix only -- never the whole bucket.
     resources = ["${var.workspaces_bucket_arn}/ws/*"]
   }
 
@@ -132,11 +105,6 @@ resource "aws_lambda_function" "fetch_repo" {
   environment {
     variables = merge(
       {
-        # Name matches fetch_repo.handler.DEFAULT_WORKSPACE_BUCKET_ENV
-        # exactly -- confirmed via a live Step Functions execution against
-        # Floci, 2026-09-26, after this name (previously
-        # WORKSPACES_BUCKET_NAME, a guess made before the Python side's
-        # real handler.py existed) caused a real KeyError in production.
         MODHUB_WORKSPACE_BUCKET = var.workspaces_bucket_name
         GITHUB_TOKEN_SECRET_ARN = aws_secretsmanager_secret.github_token.arn
       },

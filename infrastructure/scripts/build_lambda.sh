@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # infrastructure/scripts/build_lambda.sh
 #
 # Packages a real Lambda service (Python, uv workspace) into a zip that
@@ -9,22 +10,6 @@
 # Why not `uv export` / `uv sync --no-dev`: uv is not installed in every
 # environment this runs in. Since each service and core_py are pure-Python
 # (no compiled extensions of their own -- only their *dependencies*, e.g.
-# pydantic-core, are compiled), we copy their source trees verbatim and use
-# `pip install --platform manylinux2014_<arch> --only-binary=:all:` to fetch
-# Linux wheels for the third-party dependencies regardless of the host
-# OS/Python running this script.
-#
-# Architecture defaults to arm64, matching AWS Lambda's default for real AWS
-# deployments (Graviton2 instances). The x86_64 option is maintained for
-# compatibility and testing purposes.
-#
-# Usage:
-#   infrastructure/scripts/build_lambda.sh [output_zip_path] [arch] [service]
-#   arch:    arm64 (default) | x86_64
-#   service: api (default) | fetch_repo | core_ops | fetch_doc | agent_phase | open_pr
-#
-# Default output: infrastructure/scripts/build/<service>_lambda_<arch>.zip
-# -- the architecture is part of the default filename to prevent overwrites.
 
 set -euo pipefail
 
@@ -42,18 +27,10 @@ case "${ARCH}" in
   *) echo "error: unsupported arch '${ARCH}' -- use arm64 or x86_64" >&2; exit 1 ;;
 esac
 
-# WORKSPACE_PACKAGES: "src_dir:package_name" pairs, every workspace
-# package this service's handler actually imports at runtime -- NOT every
-# workspace package that exists (fetch_doc, for instance, imports none of
-# them; agent_phase imports four). Each is copied read-only, never
-# modified by this script.
 case "${SERVICE}" in
   api)
     SERVICE_SRC="${REPO_ROOT}/services/api/src/api"
     SERVICE_PKG_NAME="api"
-    # strategies_sdk/python_pydantic_v2: Fase 4's objective resolver
-    # (api/strategy_lookup.py) needs the same registered-strategy catalog
-    # agent_phase uses, to build the resolver's closed candidate list.
     WORKSPACE_PACKAGES=(
       "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
@@ -70,10 +47,6 @@ case "${SERVICE}" in
   core_ops)
     SERVICE_SRC="${REPO_ROOT}/services/core_ops/src/core_ops"
     SERVICE_PKG_NAME="core_ops"
-    # strategies_sdk/python_pydantic_v2: core_ops re-derives the approved
-    # scope from the manifest to check the diff against it (invariant #4),
-    # rather than trusting what agent_phase reports. Pure Python, no
-    # Bedrock -- invariant #1 is untouched.
     WORKSPACE_PACKAGES=(
       "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
@@ -84,10 +57,6 @@ case "${SERVICE}" in
   fetch_doc)
     SERVICE_SRC="${REPO_ROOT}/services/fetch_doc/src/fetch_doc"
     SERVICE_PKG_NAME="fetch_doc"
-    # Zero workspace/core_py dependency on purpose -- CLAUDE.md's
-    # permissions table: this service gets no AWS permissions, ever, and
-    # depending on core_py (which pulls in boto3) would blur that even at
-    # the packaging level.
     WORKSPACE_PACKAGES=()
     THIRD_PARTY_DEPS=("requests>=2.31")
     ;;
@@ -99,10 +68,6 @@ case "${SERVICE}" in
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
       "${REPO_ROOT}/strategies/python_pydantic_v2/src/python_pydantic_v2:python_pydantic_v2"
     )
-    # strands-agents pulls in a real dependency tree (its own transitive
-    # deps, not just the two obvious ones) -- pinned to the exact version
-    # in this workspace's lockfile so a build never silently drifts to a
-    # newer strands-agents than what was actually tested against.
     THIRD_PARTY_DEPS=("strands-agents==1.57.1" "pydantic>=2.7" "boto3>=1.34")
     ;;
   open_pr)
@@ -135,7 +100,6 @@ mkdir -p "${BUILD_DIR}"
 
 echo "==> Copying services/${SERVICE}/src/${SERVICE_PKG_NAME} (read-only source, not modified)"
 cp -r "${SERVICE_SRC}" "${BUILD_DIR}/${SERVICE_PKG_NAME}"
-# Drop bytecode caches picked up from the dev tree - keep the artifact clean.
 find "${BUILD_DIR}/${SERVICE_PKG_NAME}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 for pkg_pair in "${WORKSPACE_PACKAGES[@]+"${WORKSPACE_PACKAGES[@]}"}"; do
@@ -146,25 +110,7 @@ for pkg_pair in "${WORKSPACE_PACKAGES[@]+"${WORKSPACE_PACKAGES[@]}"}"; do
   find "${BUILD_DIR}/${pkg_name}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 done
 
-# Real bug hit building agent_phase (2026-09-26), not hypothetical: plain
-# `pip install --platform manylinux2014_x86_64 --python-version 3.14` from
-# this Windows host still evaluates dependency environment markers (e.g.
-# strands-agents' transitive `mcp` package requiring `pywin32; sys_platform
-# == "win32"`) against the HOST's sys_platform, not the target's --
-# `--platform` only steers wheel *tag* selection, not marker evaluation.
-# Result: pip demands a Windows-only package while building a Linux
-# artifact, and fails outright. Running the install inside a real Linux
-# container sidesteps this at the root instead of patching around it with
-# fragile pip flags -- sys_platform is genuinely "linux" in there.
 echo "==> Installing third-party dependencies (${THIRD_PARTY_DEPS[*]}) inside a linux/${ARCH} python:3.14-slim container"
-# MSYS_NO_PATHCONV=1: Git Bash on Windows mangles the -v HOST:CONTAINER
-# argument by trying to path-convert both sides (breaking the container
-# side, "/out"). Confirmed empirically, 2026-09-26 -- without it, the
-# container sees "/out" as nonexistent even though the flag parses. Also
-# confirmed: the host path must resolve under a real Windows drive Docker
-# Desktop shares (e.g. /c/Users/...) -- /tmp is Git Bash's own overlay, not
-# a path Docker Desktop can see, and silently binds an empty volume instead
-# of erroring.
 MSYS_NO_PATHCONV=1 docker run --rm \
   --platform "${DOCKER_PLATFORM}" \
   -v "${BUILD_DIR}:/out" \
@@ -174,9 +120,6 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 echo "==> Zipping ${BUILD_DIR} -> ${OUT_ZIP}"
 mkdir -p "$(dirname "${OUT_ZIP}")"
 rm -f "${OUT_ZIP}"
-# Use Python's zipfile rather than the `zip` binary - not guaranteed to be
-# installed (it wasn't, in the environment this script was authored in),
-# whereas python3 is already required for the pip step above.
 python3 - "${BUILD_DIR}" "${OUT_ZIP}" <<'PYEOF'
 import os
 import sys

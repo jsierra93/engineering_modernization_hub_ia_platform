@@ -52,8 +52,8 @@ variable "mfa_configuration" {
     CLAUDE.md's scope-negotiation philosophy for why a case-study
     prototype defers a control like this instead of half-building it.
   EOT
-  type    = string
-  default = "OFF"
+  type        = string
+  default     = "OFF"
 }
 
 variable "issuer_base_url" {

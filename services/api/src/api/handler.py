@@ -1,14 +1,5 @@
-"""Minimal Lambda handler for `POST /modhub/v1/runs` and
-`GET /modhub/v1/runs/{run_id}`.
-
-Scope for this scaffolding pass (PLAN.md Fase 1, task 1.6):
-
-- `strategy_id` is hardcoded/stubbed here. The real Bedrock-based
-  objective -> strategy resolver is Fase 4 (task 4.4) and lives in
-  `services/api/resolver/`, isolated per CLAUDE.md's one documented
-  Bedrock exception. This handler must not call Bedrock.
-- Starting the Step Functions execution uses a boto3 client so it can be
-  mocked in tests; the real state machine is Fase 1's task 1.5-tf.
+"""lambda api handler: creates, lists, reads and approves runs, and serves the report.
+Does not call Bedrock directly; objective resolution lives in api/resolver.
 """
 
 from __future__ import annotations
@@ -39,21 +30,9 @@ APPROVAL_MAX_AUTH_AGE_SECONDS_ENV = "MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS"
 
 DEV_STRATEGY_ID_ENV = "MODHUB_DEV_STRATEGY_ID"
 
-# Comma-separated `owner/name` or `owner/*`. Unset means any well-formed
-# repo, which is the prototype's posture: the requester supplies the
-# repository and the sandbox has no credentials to abuse. The hook exists
-# because the design document already promised this control, and because
-# an internal deployment would want it.
 REPO_ALLOWLIST_ENV = "MODHUB_REPO_ALLOWLIST"
 DEFAULT_APPROVAL_MAX_AUTH_AGE_SECONDS = 300
 
-# CLAUDE.md invariant #5: request <= strategy max <= platform ceiling.
-# Registration (strategies_sdk.registry.StrategyRegistry.register) already
-# enforces strategy-max <= platform-ceiling; this is the remaining link --
-# a request may only tighten the resolved strategy's own max, never exceed
-# it. Duplicated as a plain loop here rather than importing
-# core_ops.limits.resolve_limits: api and core_ops are separately packaged
-# Lambdas (see api/strategy_lookup.py's own comment on this boundary).
 LIMIT_FIELDS = ("max_usd", "max_iterations", "max_minutes")
 
 
@@ -63,8 +42,6 @@ def _repo_is_allowed(repo: str, allowlist: list[str]) -> bool:
 
 
 def _loggable_body(event: dict[str, Any]) -> Any:
-    """The request body, never the headers: those carry the bearer token."""
-
     raw = event.get("body") or ""
     if not raw:
         return None
@@ -91,16 +68,6 @@ def _ok_response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _requested_by(event: dict[str, Any]) -> str:
-    """The caller's `sub`, which every Cognito token carries -- it is a
-    required OIDC claim, and for a machine-to-machine token it is the app
-    client id rather than being absent.
-
-    The header fallback only ever runs where no JWT authorizer did (the
-    local env, which sets `enable_jwt_authorizer = false`). With the
-    authorizer on, API Gateway rejects the request before this code runs,
-    so the header cannot be used to impersonate anyone. It resolves to a
-    sub that owns no runs, so every scoping decision built on it fails
-    closed."""
     claims = (
         event.get("requestContext", {})
         .get("authorizer", {})
@@ -114,38 +81,19 @@ def _requested_by(event: dict[str, Any]) -> str:
 
 
 def _load_own_run(event: dict[str, Any], runs_table: RunsTable, run_id: str):
-    """The run, if it belongs to the caller. Otherwise the 404 to return.
-
-    A run someone else requested is reported as not found, not as
-    forbidden: 403 would confirm that a given run_id exists, which is the
-    one thing an unauthorized caller could learn from an id they guessed.
-    Approval answers 403 instead, deliberately -- there the caller already
-    holds the id from their own inbox, and "you may not approve this" is
-    more useful than pretending it is missing.
-    """
-
     run = runs_table.get(run_id)
+    # Someone else's run answers 404, not 403, so a guessed run_id confirms nothing.
     if run is None or run.requested_by != _requested_by(event):
         return None, _error_response(404, "RUN_NOT_FOUND", "No run with that id.", run_id)
     return run, None
 
 
 def _get_trace_id(event: dict[str, Any]) -> str:
-    """Extract or generate trace_id for distributed tracing.
-    Follows W3C Trace Context convention (x-trace-id header).
-    If x-trace-id header exists, use it; otherwise generate new UUID."""
     headers = event.get("headers") or {}
     return headers.get("x-trace-id") or headers.get("X-Trace-Id") or str(uuid.uuid4())
 
 
 def _auth_is_recent(event: dict[str, Any]) -> bool:
-    """CLAUDE.md invariant #7: approval requires 'auth is recent', not
-    just a validly-signed-but-old token. A real Cognito JWT always carries
-    `auth_time` (when the user actually authenticated, not when this
-    particular access token was minted/refreshed). No `auth_time` means
-    no real JWT authorizer ran (local/dev's x-requested-by fallback, Fase
-    4 task 4.2-tf not enabled) -- nothing to check in that path."""
-
     claims = (
         event.get("requestContext", {})
         .get("authorizer", {})
@@ -168,8 +116,6 @@ def create_run(
     sfn_client: Any,
     bedrock_client: Any = None,
 ) -> dict[str, Any]:
-    """Handle `POST /modhub/v1/runs`."""
-
     trace_id = _get_trace_id(event)
 
     try:
@@ -201,16 +147,6 @@ def create_run(
     candidates = list_strategy_manifests()
     dev_strategy_id = os.environ.get(DEV_STRATEGY_ID_ENV)
     if dev_strategy_id:
-        # Local-dev-only escape hatch (2026-09-26), same shape as
-        # modhub-backend's devToken: Floci doesn't emulate real Bedrock
-        # inference, so resolve_strategy's own call always comes back
-        # unusable here regardless of `objetivo` -- confirmed empirically,
-        # not a hypothetical. When set, skip Bedrock entirely and use this
-        # strategy id directly, so the rest of the flow (FetchRepo,
-        # Baseline, ...) is still exercisable against Floci. Unset in
-        # envs/personal -- see infrastructure/envs/local/main.tf's own
-        # comment on where this env var is set, and DELETE it there too
-        # once testing against real AWS Bedrock specifically.
         manifest = next((m for m in candidates if m.id == dev_strategy_id), None)
         if manifest is None:
             return _error_response(
@@ -222,18 +158,12 @@ def create_run(
         match_confidence = 1.0
     else:
         try:
-            # No client built here on purpose: the one documented Bedrock
-            # call stays inside services/api/resolver (CLAUDE.md).
             manifest, match_confidence = resolve_strategy(
                 body["objetivo"], candidates, bedrock_client=bedrock_client
             )
         except NoStrategyMatchError as exc:
             return _error_response(422, "NO_STRATEGY_MATCH", str(exc), None)
         except ResolverUnavailableError as exc:
-            # Retryable and not the caller's fault -- a throttle answered
-            # 500 before, which reads as "this request is broken" rather
-            # than "try again". No run exists yet, so there is nothing to
-            # mark FALLIDO_CONTROLADO.
             log_event("api.resolver_unavailable", trace_id=trace_id, error=str(exc)[:300])
             return _error_response(
                 503,
@@ -244,11 +174,7 @@ def create_run(
 
     for field in LIMIT_FIELDS:
         value = body[field]
-        # `bool` is a subclass of `int`, so `max_usd: true` would sail past
-        # a plain isinstance check and compare as 1 -- accepted in silence
-        # with a nonsensical limit. And comparing a str against a float
-        # raises TypeError here, turning bad input into a 500 before the
-        # model ever sees it.
+        # bool is an int subclass, so it must be rejected explicitly.
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return _error_response(
                 422,
@@ -270,12 +196,6 @@ def create_run(
                 None,
             )
 
-    # Every constraint below -- the 40-character commit, a non-empty
-    # objetivo, `extra="forbid"` on restricciones -- is a statement about
-    # the request, so breaking one is the caller's error, not the server's.
-    # Uncaught, pydantic's ValidationError propagated and API Gateway
-    # answered 500, which tells a client "retry, the server is broken" for
-    # input that will fail identically every time.
     try:
         run = Run(
             repo=body["repo"],
@@ -315,10 +235,6 @@ def create_run(
     sfn_client.start_execution(
         stateMachineArn=state_machine_arn,
         name=str(run.run_id),
-        # Everything downstream states need and can't derive from a prior
-        # phase's own result rides along in this initial input -- Step
-        # Functions' ResultPath merges preserve these across every later
-        # state (see orchestration's ASL), so they never need re-threading.
         input=json.dumps(
             {
                 "trace_id": trace_id,
@@ -354,24 +270,6 @@ def list_runs(
     event: dict[str, Any],
     runs_table: RunsTable,
 ) -> dict[str, Any]:
-    """Handle `GET /modhub/v1/runs?mine=&status=`.
-
-    A real gap closed during Fase 5's Backstage work: the artifact's own
-    API table and packages/contracts/openapi.yaml both document this
-    route (it backs `modhub inbox`/`modhub runs` and Backstage's
-    Modernizaciones list), but no handler existed for it before now.
-
-    Always scoped to the caller's own `sub`. `mine` is accepted and
-    ignored: a caller can only act on their own runs (invariant #7 gates
-    approval on `sub == requested_by`), so listing anyone else's was
-    surfacing rows nothing could be done with. Scoping in the client was
-    a filter; scoping here is a control.
-
-    Fails closed by construction: with no JWT claims `_requested_by`
-    yields a sub that owns no runs, which returns an empty list -- never
-    the whole table.
-    """
-
     query_params = event.get("queryStringParameters") or {}
     status = query_params.get("status")
     sub = _requested_by(event)
@@ -391,15 +289,6 @@ SECURITY_EVENT_TYPES = ("SecurityBlocked",)
 
 
 def _security_events(run_id: str, events_table: EventsTable | None) -> list[dict[str, Any]]:
-    """The run's security events, for the report.
-
-    The brief's injection scenario requires the platform to "registrar el
-    evento". They are written to the events table by core_ops, but until
-    now nothing surfaced them: the control worked and left no visible
-    trace, which is not evidence. Read-only here -- lambda api has Query
-    and no write permission on that table, so the report cannot alter the
-    audit trail it displays."""
-
     if events_table is None:
         return []
     try:
@@ -414,13 +303,6 @@ def _security_events(run_id: str, events_table: EventsTable | None) -> list[dict
 
 
 def _read_diff(run: Run, s3_resource: Any) -> str | None:
-    """Fetch the diff from S3 so the report stays self-contained.
-
-    Read on demand rather than stored on the run: a diff can reach
-    hundreds of KB and a DynamoDB item tops out at 400 KB. A missing or
-    unreadable object degrades to no diff -- it is evidence attached to a
-    verdict, never an input to it, so it must not fail the report."""
-
     bucket = os.environ.get(WORKSPACE_BUCKET_ENV)
     if not run.diff_key or not bucket or s3_resource is None:
         return None
@@ -437,11 +319,6 @@ def get_report(
     s3_resource: Any = None,
     events_table: EventsTable | None = None,
 ) -> dict[str, Any]:
-    """Handle `GET /modhub/v1/runs/{run_id}/report` -- what the run
-    delivers: the verdict core_ops computed, the diff it measured from S3,
-    and the agent's own narrative. Separate authors, one document
-    (CLAUDE.md invariant #10)."""
-
     path_params = event.get("pathParameters") or {}
     run_id = path_params.get("run_id")
     if not run_id:
@@ -490,8 +367,6 @@ def get_run(
     event: dict[str, Any],
     runs_table: RunsTable,
 ) -> dict[str, Any]:
-    """Handle `GET /modhub/v1/runs/{run_id}`."""
-
     path_params = event.get("pathParameters") or {}
     run_id = path_params.get("run_id")
     if not run_id:
@@ -506,9 +381,6 @@ def get_run(
     if denied:
         return denied
 
-    # task_token is an internal Step Functions callback detail (Fase 4),
-    # never part of the public API contract -- see packages/contracts/
-    # openapi.yaml's Run schema and its own test for why.
     return _ok_response(200, run.model_dump(mode="json", exclude={"task_token"}))
 
 
@@ -517,15 +389,6 @@ def handle_approval(
     runs_table: RunsTable,
     sfn_client: Any,
 ) -> dict[str, Any]:
-    """Handle `POST /modhub/v1/runs/{run_id}/approval`.
-
-    "Quien crea la solicitud es quien la aprueba" (CLAUDE.md): the 403
-    identity check happens here, against the run as it exists right now,
-    *before* the atomic conditional update -- so a caller who is simply
-    the wrong person gets 403, and only a genuine race (state changed,
-    plan changed, or a resubmit) reaches the 409 the DB condition raises.
-    """
-
     path_params = event.get("pathParameters") or {}
     run_id = path_params.get("run_id")
     if not run_id:
@@ -572,13 +435,7 @@ def handle_approval(
             run_id,
         )
 
-    # Before the conditional write, not after. The callback is the only
-    # thing that actually resumes the execution; without a token there is
-    # nothing to call, and writing the status first would leave the run
-    # reading RUNNING while the state machine sat in AwaitApproval until
-    # its timeout -- which would then report APPROVAL_TIMED_OUT and blame
-    # a human who did approve. Failing here keeps the run in
-    # AWAITING_APPROVAL, where the timeout still means what it says.
+    # Checked before the conditional write: without a token the callback cannot resume the execution.
     if not run.task_token:
         log_event("api.approval_without_token", run_id=run_id, status=run.status.value)
         return _error_response(
@@ -610,9 +467,6 @@ def handle_approval(
         runs_table.put(run)
         log_event("api.approval_recorded", run_id=run_id, decision=decision, waited_seconds=round(waited, 1))
 
-    # The Run row we already read still carries the task_token recorded by
-    # AwaitApproval (record_task_token) -- reading it again post-update
-    # would just refetch the same value now paired with the new status.
     try:
         if decision == "approve":
             sfn_client.send_task_success(
@@ -630,11 +484,6 @@ def handle_approval(
         log_event("api.approval_callback_failed", run_id=run_id, error_code=code, error=str(exc)[:300])
 
         if code in ("TaskTimedOut", "TaskDoesNotExist"):
-            # The execution already stopped waiting -- AwaitApproval hit
-            # its timeout, or the run ended some other way. Nothing to
-            # resume and nothing to retry, so the status stays where the
-            # conditional write left it rather than pretending the run is
-            # back in the queue.
             return _error_response(
                 409,
                 "RUN_NO_LONGER_WAITING",
@@ -642,10 +491,6 @@ def handle_approval(
                 run_id,
             )
 
-        # Anything else is transient. Put the run back where it was so the
-        # same request can simply be retried -- leaving it decided would
-        # make every retry fail the conditional write with a 409 and strand
-        # the requester with no way forward.
         run.status = RunStatus.AWAITING_APPROVAL
         runs_table.put(run)
         return _error_response(
@@ -660,13 +505,6 @@ def handle_approval(
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
-    """Lambda entrypoint, dispatching on HTTP method + route.
-
-    Real deployments inject the DynamoDB/Step Functions clients via the
-    default boto3 constructors; tests pass moto-backed / mocked clients
-    through `create_run`/`get_run` directly.
-    """
-
     runs_table = RunsTable()
     sfn_client = boto3.client("stepfunctions")
 
@@ -698,9 +536,6 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         else:
             response = _error_response(404, "ROUTE_NOT_FOUND", "No route matches this request.", None)
     except Exception as exc:
-        # Re-raised so the state machine / API Gateway still see the failure;
-        # logged first because an unhandled traceback alone does not say which
-        # request produced it.
         log_event(
             "api.unhandled_error",
             method=method,

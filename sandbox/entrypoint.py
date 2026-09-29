@@ -1,45 +1,7 @@
 #!/usr/bin/env python3
-"""Sandbox entrypoint — runs exactly one named check.
-
-CLAUDE.md invariant #3: "Checks are named, and their command comes from
-the strategy. The agent chooses neither the command nor its flags. There
-is no free shell in the sandbox." This script is the enforcement point
-for that invariant at the container level: it accepts a single
-positional argument — one of a small, hardcoded allowlist of check
-names — and refuses anything else. There is no way to pass an arbitrary
-command through this entrypoint.
-
-I/O contract — two supported modes, chosen at run time by whether the
-WORKSPACE_GET_URL/JUNIT_PUT_URL env vars are set:
-
-  Local mount mode (no env vars set): /workspace and /output are
-  read/write bind mounts the caller set up. This is the mode used for
-  everything in this file's own README/fixture-based verification.
-
-  Presigned-URL mode (CLAUDE.md invariant #8: "access to its own run
-  only through presigned URLs"): still no AWS SDK, no AWS credentials,
-  ever — a presigned URL is a plain HTTPS GET/PUT that happens to carry
-  a one-time-use signature in its query string, nothing more. If
-  WORKSPACE_GET_URL is set, this script downloads that URL (a single
-  tar.gz, built by fetch_repo — a presigned URL only ever names one S3
-  object, and the workspace is many files, hence one consolidated
-  archive) and extracts it into /workspace before running the check,
-  using the same tar-slip protections as `fetch_repo.sanitize` (this
-  image has no dependency on that package, so the check is duplicated
-  here, deliberately conservative, rather than trusting an archive that
-  already passed through one sanitization pass upstream). If
-  JUNIT_PUT_URL is set and /output/junit.xml exists after the check
-  runs, it's PUT to that URL. Uses only the standard library
-  (`urllib.request`) — no `requests`, to keep this image's dependency
-  surface minimal (it already has zero AWS SDK; no reason to add an HTTP
-  client dependency either).
-
-Exit code contract:
-  0   the check passed
-  1   the check ran and failed (e.g. a test failed, lint found issues)
-  2   usage/configuration error (unknown check name, missing workspace,
-      a presigned URL fetch/push failure, etc.) — never confused with
-      "the check ran and failed"
+"""Sandbox entrypoint: runs exactly one named check (install, unit_tests, lint), never a free command.
+No AWS SDK or credentials: workspace and JUnit travel over presigned URLs.
+Exit codes: 0 passed, 1 check failed, 2 usage or transport error.
 """
 
 from __future__ import annotations
@@ -56,16 +18,15 @@ OUTPUT = Path("/output")
 WORKSPACE_GET_URL_ENV = "WORKSPACE_GET_URL"
 JUNIT_PUT_URL_ENV = "JUNIT_PUT_URL"
 
-# Same limits as fetch_repo.sanitize, duplicated rather than shared (this
-# image has no dependency on that package -- see module docstring).
 MAX_TOTAL_UNCOMPRESSED_BYTES = 300 * 1024 * 1024
 MAX_SINGLE_FILE_BYTES = 50 * 1024 * 1024
 
 
 class WorkspaceFetchError(Exception):
-    """Downloading or safely extracting WORKSPACE_GET_URL failed."""
+    pass
 
 
+# Duplicated from fetch_repo.sanitize on purpose: this image has no dependency on platform packages.
 def _is_within_root(candidate: str) -> bool:
     if candidate.startswith("/") or candidate.startswith("\\"):
         return False
@@ -85,11 +46,6 @@ def _is_within_root(candidate: str) -> bool:
 
 
 def fetch_workspace(url: str) -> None:
-    """Download the consolidated workspace archive and extract it into
-    /workspace, with the same tar-slip protections fetch_repo already
-    applied once upstream (belt and suspenders: this image never trusts
-    an archive just because it arrived over a presigned URL)."""
-
     try:
         with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310 - fixed https presigned URL, not user input
             archive_bytes = resp.read()
@@ -122,10 +78,6 @@ def fetch_workspace(url: str) -> None:
 
 
 def push_junit(url: str) -> None:
-    """PUT /output/junit.xml to a presigned URL, if it exists. Silent
-    no-op if the check that ran doesn't produce one (e.g. `lint`) --
-    this is called unconditionally after every check."""
-
     junit_path = OUTPUT / "junit.xml"
     if not junit_path.exists():
         return
@@ -138,25 +90,16 @@ def push_junit(url: str) -> None:
     except Exception as exc:  # noqa: BLE001 - re-raised as our own type
         raise WorkspaceFetchError(f"failed to push {junit_path} to presigned URL: {exc}") from exc
 
-# The complete, closed set of checks this image will ever run. Adding a
-# check means editing this file and rebuilding the image — it is never
-# something a caller can inject at run time.
 KNOWN_CHECKS = ("install", "unit_tests", "lint")
 
 
 def _emit(event: str, **fields) -> None:
-    """One JSON line to stdout, which the awslogs driver ships to
-    CloudWatch. Mirrors core_py.observability.log_event's shape, but
-    inlined: this image deliberately has no dependency on core_py."""
     import json
 
     print(json.dumps({"event": event, **fields}, default=str), flush=True)
 
 
 def _write_log(name: str, result: subprocess.CompletedProcess) -> None:
-    """Persist stdout/stderr for a check under /output, and echo to the
-    container's stdout -- /output does not survive the task, so CloudWatch
-    is the only place this is readable after the fact."""
     body = (
         f"$ {' '.join(result.args)}\n"
         f"exit_code={result.returncode}\n\n"
@@ -169,24 +112,16 @@ def _write_log(name: str, result: subprocess.CompletedProcess) -> None:
 
 
 def _run(cmd: list[str], cwd: Path = WORKSPACE) -> subprocess.CompletedProcess:
+    # Fixed argv, never a shell: the command is built entirely inside this file.
     return subprocess.run(
         cmd,
         cwd=cwd,
         capture_output=True,
         text=True,
-        # No shell=True anywhere: cmd is always a fixed argv list built
-        # entirely inside this file, never from user/agent input.
     )
 
 
 def check_install() -> int:
-    """Install the project's own dependencies (not this image's tooling).
-
-    Handles both a requirements*.txt project and a pyproject.toml
-    (PEP 517/518) project. Installs into the image's user site-packages
-    (no AWS index, no credentials — plain PyPI, which is the documented
-    "modo public" network posture).
-    """
     requirements = sorted(WORKSPACE.glob("requirements*.txt"))
     pyproject = WORKSPACE / "pyproject.toml"
 
@@ -213,23 +148,12 @@ def check_install() -> int:
             "nothing to install.\n",
             encoding="utf-8",
         )
-        # Nothing to install is not itself a failure — a strategy may
-        # target a project with zero third-party dependencies.
         return 0
 
     return overall_rc
 
 
 def _junit_summary(junit_path: Path) -> dict:
-    """What the report claims, next to what the process actually returned.
-
-    A test harness the agent can influence writes the XML; the exit code
-    comes from the process itself. Emitting both makes a disagreement
-    visible instead of a silent pass. Detection, not prevention: producing
-    the JUnit from a parent process under a different uid is the complete
-    fix, and is not done here.
-    """
-
     if not junit_path.exists():
         return {"junit": "missing"}
     try:
@@ -250,16 +174,6 @@ def _junit_summary(junit_path: Path) -> dict:
 
 
 def check_unit_tests() -> int:
-    """Run pytest, producing real JUnit XML at /output/junit.xml.
-
-    This is the file core_ops parses to compute the verdict (invariant
-    #1/#2/#10) — the format must be genuine JUnit, not a hand-rolled
-    summary, and pytest's own --junitxml writer is what guarantees that.
-    """
-    # The state machine runs one check per container and containers share
-    # no filesystem, so a separately-run `install` check would not reach
-    # this one. Installing here is what makes the run test the project
-    # rather than a chain of ImportErrors.
     install_rc = check_install()
     if install_rc != 0:
         _emit("sandbox.install_failed_before_tests", exit_code=install_rc)
@@ -280,9 +194,6 @@ def check_unit_tests() -> int:
     _emit("sandbox.junit_crosscheck", exit_code=result.returncode, **_junit_summary(junit_path))
 
     if not junit_path.exists():
-        # pytest can exit non-zero for reasons that never produce a
-        # report (e.g. a collection error before any test runs). Make
-        # that failure mode explicit rather than silently missing.
         (OUTPUT / "unit_tests.error").write_text(
             "pytest did not produce /output/junit.xml — see unit_tests.log.\n",
             encoding="utf-8",
@@ -293,12 +204,6 @@ def check_unit_tests() -> int:
 
 
 def check_lint() -> int:
-    """Run ruff, writing captured output (and a JSON report) to /output.
-
-    Not JUnit-shaped by design (per task scope) — just a clear pass/fail
-    exit code plus readable output for a human or a non-blocking check
-    per CLAUDE.md's COMPLETADO_PARCIALMENTE state.
-    """
     report_path = OUTPUT / "lint.json"
     result = _run(
         [
@@ -335,10 +240,6 @@ def main(argv: list[str]) -> int:
 
     name = argv[0]
     if name not in CHECKS:
-        # Refuse anything not in the closed allowlist. This is the
-        # concrete enforcement of "no free shell in the sandbox" — there
-        # is no code path from an unrecognized argument to subprocess
-        # execution.
         sys.stderr.write(
             f"unknown check '{name}'. known checks: {', '.join(KNOWN_CHECKS)}\n"
         )
@@ -358,9 +259,6 @@ def main(argv: list[str]) -> int:
 
     _emit("sandbox.check_started", check=name)
     exit_code = CHECKS[name]()
-    # pytest's exit 5 is "no tests collected" -- a real, distinct outcome
-    # from "tests failed", and the reason a repo with no suite reaches
-    # BLOQUEADO rather than looking like a broken run.
     _emit("sandbox.check_finished", check=name, exit_code=exit_code)
 
     junit_put_url = os.environ.get(JUNIT_PUT_URL_ENV)
@@ -368,10 +266,6 @@ def main(argv: list[str]) -> int:
         try:
             push_junit(junit_put_url)
         except WorkspaceFetchError as exc:
-            # The check itself already ran and produced a real result --
-            # a failure to push it is reported, but must not overwrite a
-            # genuine pass (0) with a misleading usage error (2), nor
-            # hide a genuine failure (1) behind "looks fine, exit 0".
             sys.stderr.write(f"junit push failed: {exc}\n")
             return exit_code or 2
 

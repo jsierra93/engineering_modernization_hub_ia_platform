@@ -1,4 +1,4 @@
-"""Manifest for the `python-pydantic-v2` strategy."""
+"""Manifest for the python-pydantic-v2 strategy: inputs, limits, checks, writable and excluded paths."""
 
 from __future__ import annotations
 
@@ -27,18 +27,11 @@ _LIMITS = StrategyLimits(
 
 _CHECKS = ["install", "unit_tests", "lint"]
 
-# Writable paths intersect with the strategy's own domain: Python source
-# and its packaging manifests. CI configuration and infrastructure-as-code
-# are excluded even though a glob like **/*.py would otherwise reach them.
 _WRITABLE_PATHS = [
     "**/*.py",
     "pyproject.toml",
     "requirements*.txt",
 ]
-# conftest.py and the pytest/ruff config decide how the checks run and what
-# they report. A strategy that let the agent rewrite them would be handing
-# it the pen that writes its own verdict (invariant #2), so they stay out of
-# scope even though they are Python and sit inside writable_paths.
 _EXCLUDED_PATHS = [
     "**/ci/**",
     "**/*.tf",
@@ -69,8 +62,4 @@ def manifest() -> StrategyManifest:
     )
 
 
-# Exposed separately from the manifest schema (which has no room for an
-# "excluded" list) so the policy gate (Fase 3, task 3.5) can intersect it
-# with the request's own restricciones.excluded_paths per CLAUDE.md
-# invariant #4 (resolve_scope only tightens).
 EXCLUDED_PATHS = _EXCLUDED_PATHS

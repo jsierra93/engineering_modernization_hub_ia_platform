@@ -1,16 +1,5 @@
-"""Tar-slip-safe extraction of an untrusted GitHub tarball.
-
-The tarball is hostile input (CLAUDE.md invariant #9 -- "external content
-is untrusted"; in the "solicitud insegura" scenario the repo itself may
-be adversarial). A naive `TarFile.extractall()` is a classic path-traversal
-/ symlink-escape vulnerability: an entry named e.g. `../../etc/passwd`, an
-absolute path, or a symlink pointing outside the extraction root can
-overwrite arbitrary files on the machine doing the extracting.
-
-This module never extracts to local disk -- it walks the tar stream in
-memory and yields (path, bytes) pairs for members it accepts, skipping (or
-raising on) anything unsafe. Callers write the accepted members wherever
-they want (here: S3, under `ws/<run_id>/v0/`).
+"""Tar-slip-safe, in-memory extraction of an untrusted tarball (invariant 9).
+Rejects links, devices, path traversal and oversized members.
 """
 
 from __future__ import annotations
@@ -19,44 +8,24 @@ import tarfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-# Sized against the memory that has to enforce it, not against what a
-# "generous" repo looks like. `fetch_and_store_repo` holds three copies at
-# once -- the downloaded tarball, every decompressed member in a list, and
-# the consolidated archive it rebuilds for the sandbox's presigned GET --
-# inside a 512 MB Lambda. The previous 300 MB was therefore unreachable:
-# the function died of an opaque OOM long before the limit could produce a
-# clean TarSanitizationError, so the declared protection never ran.
-#
-# The real fix is to stream members to S3 instead of materialising them,
-# which removes two of the three copies and lets this number go back up.
-# Until then the limit says what the process can actually survive.
-MAX_TOTAL_UNCOMPRESSED_BYTES = 120 * 1024 * 1024  # 120 MB
-MAX_SINGLE_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+# Sized to what a 512 MB Lambda survives while holding the tarball, its members and the rebuilt archive.
+MAX_TOTAL_UNCOMPRESSED_BYTES = 120 * 1024 * 1024
+MAX_SINGLE_FILE_BYTES = 20 * 1024 * 1024
 
 
 class TarSanitizationError(Exception):
-    """Raised when a tarball contains an entry (or exceeds a limit) that
-    makes it unsafe to extract. The caller should treat this as a failed
-    fetch, never as a partially-successful one."""
+    pass
 
 
 @dataclass(frozen=True)
 class SanitizedMember:
-    """One accepted regular-file entry, with its path relativized to the
-    tar's own top-level directory stripped (GitHub tarballs wrap
-    everything in a single `<owner>-<repo>-<sha>/` prefix)."""
-
     path: str
     data: bytes
 
 
 def _is_within_root(candidate: str) -> bool:
-    """True if a POSIX-normalized relative path never climbs above its
-    own root via `..`, and is not absolute."""
-
     if candidate.startswith("/") or candidate.startswith("\\"):
         return False
-    # Reject drive letters (Windows absolute paths) defensively too.
     if len(candidate) >= 2 and candidate[1] == ":":
         return False
 
@@ -75,10 +44,6 @@ def _is_within_root(candidate: str) -> bool:
 
 
 def _strip_top_level(name: str) -> str | None:
-    """Strip the single top-level directory GitHub's codeload tarballs
-    always add. Returns None for an entry that IS the top-level dir
-    itself (nothing to write)."""
-
     normalized = name.replace("\\", "/").lstrip("/")
     if "/" not in normalized:
         return None
@@ -87,23 +52,6 @@ def _strip_top_level(name: str) -> str | None:
 
 
 def iter_sanitized_members(fileobj) -> Iterator[SanitizedMember]:
-    """Stream-parse a gzip tarball, yielding only safe regular files.
-
-    Raises `TarSanitizationError` on:
-      - absolute paths or `..` path-traversal in the member name
-      - symlinks or hardlinks whose target escapes the extraction root
-        (a symlink target that stays inside the tree, e.g. a relative
-        `./foo.py`, would in principle be fine, but this prototype takes
-        the simplest safe stance and rejects ALL symlinks/hardlinks --
-        source tarballs from GitHub never legitimately need one)
-      - device, FIFO, or other special files
-      - a single member, or the cumulative stream, exceeding the size caps
-
-    Never partially extracts: any violation raises before any further
-    member is yielded, and callers are expected to discard everything
-    written so far for this fetch.
-    """
-
     total_bytes = 0
 
     with tarfile.open(fileobj=fileobj, mode="r:gz") as tar:

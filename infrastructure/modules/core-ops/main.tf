@@ -1,29 +1,4 @@
-# infrastructure/modules/core-ops
-#
-# Task 2.6-tf (PLAN.md). lambda core_ops computes the final verdict from
-# real JUnit -- it is the determinístico "judge" the whole design rests on.
-#
-# ============================================================================
-# INVARIANT #1 (CLAUDE.md): core_ops MUST NEVER be granted any bedrock:*
-# IAM action, on any resource, for any reason.
-#
-# If you are about to add a statement mentioning "bedrock" to the IAM
-# policy document below -- STOP. core_ops computing the verdict from
-# Bedrock output instead of the real JUnit is exactly the failure mode this
-# invariant exists to make structurally impossible. There is no
-# policy-as-code check wired into this repo that will catch a bad grant for
-# you (Cedar/AgentCore governance is Plus item P.3, out of scope); this
-# comment block, and a human running `terraform plan` and reading the diff
-# before `apply`, are the whole enforcement mechanism today.
-# ============================================================================
-#
-# IAM for this Lambda's execution role is scoped to exactly:
-#   - dynamodb:GetItem/PutItem/UpdateItem/Query on the runs table + indexes
-#   - dynamodb:GetItem/PutItem/Query on the events table
-#   - s3:GetObject + ListBucket on the workspaces bucket, scoped to ws/*
-#   - s3:PutObject on ws/*/diff.patch, the single object it writes
-#     -- read-only, for the JUnit results and the diff between versions
-# Nothing else.
+# core_ops Lambda: deterministic core. No Bedrock permission.
 
 locals {
   lambda_source_dir  = coalesce(var.lambda_source_dir, "${path.module}/placeholder_src")
@@ -66,7 +41,6 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# NEVER add a "bedrock:*" statement to this document -- see the file header.
 data "aws_iam_policy_document" "core_ops_lambda_scope" {
   statement {
     sid    = "RunsTableReadWrite"
@@ -94,9 +68,6 @@ data "aws_iam_policy_document" "core_ops_lambda_scope" {
     resources = [var.events_table_arn]
   }
 
-  # Widened from ws/*/junit/* when core_ops began computing the run's diff:
-  # measuring what changed means reading both workspace versions, not just
-  # the test results.
   statement {
     sid       = "WorkspaceReadOnly"
     effect    = "Allow"
@@ -104,10 +75,6 @@ data "aws_iam_policy_document" "core_ops_lambda_scope" {
     resources = ["${var.workspaces_bucket_arn}/ws/*"]
   }
 
-  # The one object core_ops writes, and the only one it can. The diff moved
-  # out of the run item because a DynamoDB item tops out at 400 KB; this
-  # permission was missed in that change, so PutObject failed and the
-  # try/except swallowed it -- every run silently lost its diff.
   statement {
     sid       = "WriteRunDiffOnly"
     effect    = "Allow"

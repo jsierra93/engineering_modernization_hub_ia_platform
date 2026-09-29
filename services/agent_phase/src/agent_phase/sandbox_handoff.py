@@ -1,23 +1,4 @@
-"""Repackages the current (agent-modified) workspace for the sandbox,
-after Implement or a Fix iteration writes files.
-
-MVP simplification, documented rather than hidden: this prototype mutates
-a single `ws/<run_id>/v0/` prefix in place (the one fetch_repo populated)
-instead of writing a fresh `ws/v1`, `ws/v2`, ... per iteration as the
-design artifact's fuller version describes ("Cada iteración queda como
-ws/vN en S3"). Functionally the pipeline is identical -- fetch, plan,
-implement, verify, fix, re-verify -- but the per-iteration audit trail
-granularity is reduced to "the latest state" rather than a full history of
-intermediate versions. Revisiting this to write real vN snapshots is a
-natural follow-up once the MVP path is proven end-to-end, not a silent
-regression: it's called out here and in the top-level summary.
-
-Same reasoning as fetch_repo's own consolidated-archive step: a presigned
-URL names exactly one S3 object, and the workspace is many files, so
-repackaging into one tar.gz is what makes a single presigned GET possible
-for the sandbox (which still has zero AWS credentials -- CLAUDE.md
-invariant #8, unchanged by any of this).
-"""
+"""Snapshots workspace versions in S3 and repackages the workspace as a tar.gz with fresh presigned URLs for the sandbox."""
 
 from __future__ import annotations
 
@@ -36,12 +17,6 @@ def repackage_workspace_for_sandbox(
     junit_filename: str,
     version: str = "v0",
 ) -> dict[str, str]:
-    """Archives everything currently under `ws/<run_id>/<version>/`,
-    uploads it as one object, and returns fresh presigned GET (workspace)
-    and PUT (JUnit) URLs -- the same two fields fetch_repo's handler
-    returns, so the ASL's Verify state consumes them identically to how
-    Baseline already does."""
-
     bucket_resource = s3_resource.Bucket(bucket)
     prefix = f"ws/{run_id}/{version}/"
 
@@ -77,10 +52,6 @@ def repackage_workspace_for_sandbox(
 
 
 def copy_version(s3_resource: Any, bucket: str, run_id: str, src: str, dst: str) -> int:
-    """Snapshot one workspace version into another, so the agent writes to a
-    copy and the version it started from stays readable. Without this the
-    original is overwritten and no diff of the run is possible afterwards."""
-
     bucket_resource = s3_resource.Bucket(bucket)
     src_prefix = f"ws/{run_id}/{src}/"
     dst_prefix = f"ws/{run_id}/{dst}/"

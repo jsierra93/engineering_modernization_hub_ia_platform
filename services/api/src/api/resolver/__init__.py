@@ -1,13 +1,5 @@
-"""The ONLY Bedrock call outside the LLM zone: objetivo (free text) ->
-strategy_id. CLAUDE.md's one documented exception to "the deterministic
-core never calls a model" -- kept isolated in its own module so this
-boundary stays as obvious in the code as it is in the design document.
-`services/api` must never gain any other Bedrock use.
-
-The model only ever picks from a closed candidate list it is given up
-front; it never invents a strategy id. A hallucinated or missing id is
-treated identically to an explicit "no match" -- both raise
-NoStrategyMatchError, which create_run maps to 422 NO_STRATEGY_MATCH.
+"""The only Bedrock call outside the LLM zone: maps a free-text objective to a registered strategy id.
+The model picks from a closed candidate list; anything else is treated as no match.
 """
 
 from __future__ import annotations
@@ -32,35 +24,19 @@ _SYSTEM_PROMPT = (
 )
 
 
-# A match the model is unsure about is worse than no match: the run would
-# proceed under the wrong strategy's writable paths, limits and checks, and
-# every later control would be enforcing the wrong contract correctly.
 MIN_CONFIDENCE_ENV = "MODHUB_RESOLVER_MIN_CONFIDENCE"
 DEFAULT_MIN_CONFIDENCE = 0.6
 
 
 class NoStrategyMatchError(Exception):
-    """Raised when the model returns no id, an id outside the candidate
-    list, or a match it is not confident enough about (all treated as no
-    match, never as that match)."""
+    pass
 
 
 class ResolverUnavailableError(Exception):
-    """Bedrock could not be reached or refused the call -- a throttle, an
-    outage, a permissions problem. Distinct from NoStrategyMatchError on
-    purpose: one means "your objetivo matches nothing" (the caller's
-    request, 422) and the other means "ask again later" (ours, 503).
-    Collapsing them would tell a developer their objective was wrong when
-    the platform was simply busy."""
+    pass
 
 
 def _client(bedrock_client: Any) -> Any:
-    """Built here, never passed in from the handler. CLAUDE.md asks for
-    this call to stay isolated in this module so the one documented
-    exception is visible in the code; a client constructed in
-    `handler.py` puts half of it back outside the boundary. Tests still
-    inject their own."""
-
     if bedrock_client is not None:
         return bedrock_client
     import boto3
@@ -69,10 +45,6 @@ def _client(bedrock_client: Any) -> Any:
 
 
 def _strip_markdown_fence(text: str) -> str:
-    """Claude wraps JSON in ```json fences even when told not to
-    (confirmed against Haiku 4.5), which would otherwise read as a
-    malformed response and be indistinguishable from a real no-match."""
-
     stripped = text.strip()
     if not stripped.startswith("```"):
         return stripped
@@ -118,14 +90,9 @@ def resolve_strategy(
     try:
         parsed = json.loads(_strip_markdown_fence(text))
     except json.JSONDecodeError as exc:
-        # Distinct from a genuine no-match: a malformed response is our
-        # problem, an explicit null is the model's answer.
         log_event("resolver.unparseable_response", model_id=resolved_model_id, raw=text[:500])
         raise NoStrategyMatchError(f"model response was not valid JSON: {text!r}") from exc
 
-    # The model is free to answer with a list, a bare string or a number;
-    # `.get` on any of those raises, and so does float("alta"). Neither is
-    # a 500: it is the same unusable answer as malformed JSON.
     if not isinstance(parsed, dict):
         log_event("resolver.unparseable_response", model_id=resolved_model_id, raw=text[:500])
         raise NoStrategyMatchError(f"model response was not a JSON object: {text!r}")

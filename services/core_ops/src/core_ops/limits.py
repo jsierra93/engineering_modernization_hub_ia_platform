@@ -1,18 +1,4 @@
-"""PLAN.md task 2.6 -- `resolve_limits`: the three-level limit hierarchy
-from CLAUDE.md invariant #5: "platform ceiling (Terraform) >= strategy max
-(`manifest().limits`) >= request. Never let a request raise a ceiling."
-
-Each level can only tighten, never loosen. Both failure modes raise
-loudly rather than silently clamping, matching the pattern already
-established in `core_py.bedrock_models.resolve_model_id` (a
-misconfiguration should fail loudly, not silently do something else):
-
-- a request asking for more than the strategy's own max -> `LimitsRequestError`
-- a strategy whose own max exceeds the platform ceiling -> `LimitsConfigurationError`
-  (this is a factory/authoring bug -- it should never happen, but a
-  strategy is untrusted contribution surface per CLAUDE.md's repository
-  layout notes, so it is checked anyway, every time).
-"""
+"""Resolves limits through platform ceiling >= strategy max >= request (invariant 5)."""
 
 from __future__ import annotations
 
@@ -24,12 +10,11 @@ LIMIT_FIELDS: tuple[str, ...] = ("max_usd", "max_iterations", "max_minutes")
 
 
 class LimitsConfigurationError(Exception):
-    """The strategy's own max exceeds the platform ceiling. A factory
-    invariant violation -- never a request's fault."""
+    pass
 
 
 class LimitsRequestError(Exception):
-    """The caller requested a limit above what the strategy allows."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -44,12 +29,6 @@ def resolve_limits(
     strategy: StrategyLimits,
     platform_ceiling: dict[str, float],
 ) -> ResolvedLimits:
-    """Resolve the three-level limit hierarchy for one field at a time.
-
-    `requested` may omit any field (or be `None` entirely) to inherit the
-    strategy's own default for that field.
-    """
-
     requested = requested or {}
     resolved: dict[str, float] = {}
 

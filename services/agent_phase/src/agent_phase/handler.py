@@ -1,16 +1,5 @@
-"""Lambda handler for `agent_phase` (PLAN.md tasks 3.3/3.4/3.5/3.8).
-
-One invocation, one phase -- per the design artifact ("una fase por
-llamada"), never a long-running multi-phase loop inside a single
-invocation. The ASL passes which phase to run; this handler builds a real
-agent scoped to that run's workspace and strategy, executes exactly one
-phase function (see `phases.py`), and returns its structured result for
-`core_ops`/the next ASL state to consume.
-
-`core_ops` is what turns any of these outputs into a verdict -- this
-handler never writes a verdict, never calls SendTaskSuccess, and never
-touches DynamoDB directly (CLAUDE.md's permissions table: agent_phase gets
-`bedrock:InvokeModel` and its own run's S3 prefix, nothing else).
+"""Lambda entrypoint: builds the agent for one phase, runs it and returns the result, cost and denials.
+Never writes a verdict or calls SendTaskSuccess; core_ops applies the cost and decides.
 """
 
 from __future__ import annotations
@@ -36,16 +25,11 @@ WORKING_VERSION = "v1"
 
 
 class UnknownPhaseError(Exception):
-    """The ASL asked for a phase this handler doesn't implement. Fails
-    loudly rather than silently no-op'ing a misconfigured state machine."""
+    pass
 
 
 class PhaseProducedNothingError(Exception):
-    """A phase that burned zero tokens never reached the model at all --
-    a throttle, a rejected request, an input filter. `structured_output`
-    would still hand back a well-formed, empty result, which downstream
-    reads as "the agent had nothing to change" and a green run. Raising
-    here turns it into FALLIDO_CONTROLADO, per CLAUDE.md invariant #11."""
+    pass
 
 
 def _run(
@@ -95,10 +79,6 @@ def _run(
     handoff: dict[str, Any] = {}
 
     if phase == "discovery_plan":
-        # No write_file at all for this phase -- it explores and plans,
-        # it never touches the workspace's contents (belt-and-suspenders
-        # alongside the policy gate, which would deny an out-of-scope
-        # write anyway).
         agent = build_agent_fn(
             role=ModelRole.ANALYSIS,
             max_tokens=manifest.model_limits.analysis_max_tokens,
@@ -116,9 +96,6 @@ def _run(
         log_event("agent_phase.workspace_snapshot", run_id=run_id, files=copied,
                   frm=BASELINE_VERSION, to=WORKING_VERSION)
         result = run_implement(agent, plan=plan)
-        # The workspace just changed -- Verify needs a fresh presigned
-        # GET/PUT pair for the sandbox (which has zero AWS credentials,
-        # CLAUDE.md invariant #8, and so cannot read S3 directly itself).
         handoff = repackage_workspace_for_sandbox(
             s3_resource, bucket, run_id, junit_filename="verify.xml", version=WORKING_VERSION
         )
@@ -148,9 +125,6 @@ def _run(
     else:
         raise UnknownPhaseError(f"phase {phase!r} is not implemented")
 
-    # Reported, never spent here: agent_phase has no DynamoDB access
-    # (CLAUDE.md's permissions table) -- core_ops is what must apply this
-    # delta to the run's budget ledger via RunsTable.add_spend.
     usage = agent.event_loop_metrics.accumulated_usage
     if usage["inputTokens"] == 0 and usage["outputTokens"] == 0:
         raise PhaseProducedNothingError(f"phase {phase!r} consumed no tokens -- the model was never reached")
@@ -194,15 +168,6 @@ def _persist_phase_trail(
     phase_input: dict[str, Any],
     phase_output: dict[str, Any],
 ) -> None:
-    """CLAUDE.md: "Each phase persists its input and output to S3, which is
-    what makes the replay mode possible." Nothing was writing it, so the
-    trail the replay depends on did not exist -- and a run's reasoning was
-    reconstructible only from CloudWatch, which expires.
-
-    Best-effort on purpose: this is an audit trail, not an input to any
-    decision. A failure to write it must not fail a phase that already did
-    its work and already cost money."""
-
     trail = {
         "phase": phase,
         "input": phase_input,

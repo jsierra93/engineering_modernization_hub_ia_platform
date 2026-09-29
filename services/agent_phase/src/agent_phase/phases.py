@@ -1,13 +1,4 @@
-"""One function per ASL phase, each taking an already-built agent.
-
-Task 3.3's own scope is proving this wiring works without Bedrock: every
-function here takes a `StructuredAgent` (a Protocol satisfied by both the
-real `strands.Agent` and a trivial test double), so the phase-dispatch
-logic, prompt construction, and untrusted-content handling are all
-testable without ever calling `agent_builder.build_agent`. Task 3.4 is
-`agent_builder.build_agent` actually being used to produce the real agent
-these functions receive in production (see `handler.py`).
-"""
+"""One function per phase (discovery_plan, implement, fix) over an already-built agent."""
 
 from __future__ import annotations
 
@@ -18,20 +9,11 @@ from agent_phase.untrusted import wrap_untrusted
 
 
 class StructuredAgent(Protocol):
-    """Calling the agent runs the real tool loop; structured_output then
-    shapes whatever that loop established. Both matter: structured_output
-    on its own never invokes a tool, so a phase that only called it would
-    plan without reading the repo and implement without writing a file."""
-
     def __call__(self, prompt: str): ...
     def structured_output(self, output_model, prompt=None): ...
 
 
 def run_discovery_plan(agent: StructuredAgent, *, objetivo: str, strategy_summary: str) -> DiscoveryPlan:
-    """Phase: DiscoveryPlan. Explores the repo, consults docs, commits to
-    a complete plan before anything is written (Plan-and-Solve, per the
-    design artifact's Uso de IA section)."""
-
     prompt = (
         f"Objective (from the developer, free text): {objetivo}\n\n"
         f"Strategy this objective was resolved to: {strategy_summary}\n\n"
@@ -44,10 +26,6 @@ def run_discovery_plan(agent: StructuredAgent, *, objetivo: str, strategy_summar
 
 
 def run_implement(agent: StructuredAgent, *, plan: DiscoveryPlan) -> ImplementationResult:
-    """Phase: Implement. Writes code within the approved plan's scope --
-    the policy gate, not this function, is what actually stops a write
-    outside writable_paths."""
-
     planned_paths = ", ".join(change.path for change in plan.planned_changes) or "(none listed)"
     prompt = (
         "Implement the following approved plan using write_file. Writes outside "
@@ -67,13 +45,6 @@ def run_fix(
     iteration: int,
     max_iterations: int,
 ) -> FixAttempt:
-    """Phase: a single fix iteration (task 3.8's fix loop). The JUnit
-    excerpt is real pytest output from the sandbox -- CLAUDE.md invariant
-    #2's "Critic-Revise" pattern, where the critic is the real test run,
-    not the model evaluating itself. Wrapped as untrusted content: it can
-    contain arbitrary text from assertion messages or captured stdout that
-    originated in the repository being modernized."""
-
     prompt = (
         f"Verification failed on iteration {iteration} of {max_iterations}. "
         "Analyze the real test output below and apply a fix with write_file, "

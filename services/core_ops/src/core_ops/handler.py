@@ -1,15 +1,5 @@
-"""Lambda handler for `core_ops` -- the deterministic core, invoked at
-each checkpoint the ASL passes through. Never imports Bedrock (CLAUDE.md
-invariant #1, enforced structurally: nothing in this package or its
-dependencies pulls in `core_py.bedrock_models` or a Bedrock client).
-
-Two actions, matching the two moments the design calls "checkpoints":
-  - `record_plan`: right after DiscoveryPlan. Computes plan_hash from the
-    agent's proposed plan (never the agent's own claim of a hash) and
-    moves the run to AWAITING_APPROVAL.
-  - `compute_verdict`: after Baseline or after Verify. Parses real JUnit,
-    checks suite integrity, evaluates the five-state table, and persists
-    the result. This is the one place a run's `status` becomes final.
+"""Deterministic checkpoints invoked by the state machine: record_plan, record_spend, compute_verdict and others.
+Never imports Bedrock (invariant 1); the final state comes from the real JUnit.
 """
 
 from __future__ import annotations
@@ -29,24 +19,12 @@ from core_ops.plan_hash import compute_plan_hash
 from core_ops.suite_integrity import JUnitSummary, check_suite_integrity, parse_junit
 from core_ops.verdict import BudgetStatus, VerdictInputs, evaluate_verdict_with_reason
 
-# CLAUDE.md's platform ceiling -- resolve_limits' own invariant check
-# happens earlier (Fase 4's resolver); this handler only ever reads
-# already-resolved limits off the Run record.
-
 
 class UnknownActionError(Exception):
-    """The ASL asked for an action this handler doesn't implement."""
+    pass
 
 
 def _record_task_token(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
-    """AwaitApproval (Fase 4, task 4.3) calls this via
-    arn:aws:states:::lambda:invoke.waitForTaskToken -- the ASL passes its
-    own task token here, and core_ops persists it on the Run so a much
-    later, entirely separate Lambda invocation (POST /runs/{id}/approval)
-    can retrieve it and call SendTaskSuccess/SendTaskFailure. This
-    Task does NOT complete until that later call happens -- returning
-    from this function does not resume the state machine."""
-
     run_id = event["run_id"]
     run = runs_table.get(run_id)
     if run is None:
@@ -76,13 +54,6 @@ def _record_plan(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]
 
 
 def _resolve_junit_xml(event: dict[str, Any], *, key_field: str, xml_field: str, s3_resource: Any) -> str:
-    """Real ASL usage passes an S3 key (core_ops already has
-    `s3:GetObject` on `ws/*/junit/*` per its IAM scope -- reading it here
-    is cheaper and more robust than threading potentially large XML text
-    through Step Functions' own 256KB-per-state payload limit). Tests may
-    pass the XML text directly via `xml_field` for simplicity -- both
-    paths produce the same `JUnitSummary`."""
-
     if xml_field in event:
         return event[xml_field]
     bucket = event["workspaces_bucket"]
@@ -91,10 +62,6 @@ def _resolve_junit_xml(event: dict[str, Any], *, key_field: str, xml_field: str,
 
 
 def _persist_denials(run_id: str, denials: list[dict[str, Any]], events_table: EventsTable | None) -> None:
-    """CLAUDE.md: "cada denegación queda en la tabla de eventos". The gate
-    decides and agent_phase reports; agent_phase has no DynamoDB access, so
-    writing them is core_ops' job."""
-
     if not denials or events_table is None:
         return
 
@@ -115,12 +82,6 @@ def _persist_denials(run_id: str, denials: list[dict[str, Any]], events_table: E
 def _record_spend(
     event: dict[str, Any], runs_table: RunsTable, events_table: EventsTable | None = None
 ) -> dict[str, Any]:
-    """Applies a Bedrock cost delta reported by agent_phase (which has no
-    DynamoDB access itself) to the run's budget ledger, via the same
-    atomic conditional update `add_spend` already provides (invariant #6).
-    The spend is always recorded; whether it put the run over its limit is
-    reported back so the ASL can stop before the next phase."""
-
     run_id = event["run_id"]
     run = runs_table.get(run_id)
     if run is None:
@@ -131,8 +92,7 @@ def _record_spend(
     phase, model_id = event.get("phase"), event.get("model_id")
     if phase and model_id and run.models_used.get(phase) != model_id:
         run.models_used[phase] = model_id
-        # Before add_spend, whose atomic increment this put would otherwise
-        # overwrite with the value read above.
+        # Persist before add_spend, whose atomic increment a later put would overwrite.
         runs_table.put(run)
 
     spent_usd = runs_table.add_spend(run_id, event["delta_usd"])
@@ -152,10 +112,6 @@ def _record_spend(
 
 
 def _record_terminal_failure(event: dict[str, Any], runs_table: RunsTable) -> dict[str, Any]:
-    """Called by the ASL only when computing a verdict itself failed. Keeps
-    a run from sitting in RUNNING forever, which is worse than a wrong
-    verdict: it reads as still working."""
-
     run_id = event["run_id"]
     run = runs_table.get(run_id)
     if run is None:
@@ -184,12 +140,6 @@ def _compute_verdict(
     final: JUnitSummary = parse_junit(final_xml)
     violation = check_suite_integrity(baseline, final)
     if violation is not None:
-        # Invariant #2 is explicit: "A violation is FALLIDO_CONTROLADO plus a
-        # SecurityBlocked event, never a warning." It was exactly a warning --
-        # the violation reached log_event and the response, and nothing else.
-        # A CloudWatch line expires and is not in the report; the event table
-        # is what the run carries forward as evidence that the suite was
-        # weakened.
         _persist_denials(
             str(run_id),
             [{"tool_name": "suite_integrity", "reason": f"test suite weakened: {violation}",
@@ -197,18 +147,9 @@ def _compute_verdict(
             events_table,
         )
 
-    # The infeasible path never reaches RecordPlan -- it must not, since
-    # that state also moves the run to AWAITING_APPROVAL, and there is
-    # nothing to approve. But the plan is where the reasoning and the
-    # sources live, so without this the run reports BLOQUEADO with an empty
-    # narrative: the right verdict stripped of the evidence that
-    # invariant #11 requires it to carry.
     if event.get("plan") and run.plan is None:
         run.plan = event["plan"]
 
-    # The fix loop's real counter lives in the state machine ($.iteration);
-    # nothing was copying it onto the run, so every report said "0/N"
-    # however many corrections had actually run.
     if event.get("iteration") is not None:
         run.iterations_used = int(event["iteration"])
 
@@ -217,12 +158,6 @@ def _compute_verdict(
     if bucket and s3_resource is not None:
         try:
             diff_text, run.changed_paths = compute_diff(s3_resource, bucket, str(run_id))
-            # The diff goes to S3, never into the run item. A DynamoDB item
-            # tops out at 400 KB shared with the plan and the narrative, so
-            # a large diff makes put_item raise -- after the verdict is
-            # already computed, which the Catch then turns into
-            # FALLIDO_CONTROLADO. The bigger a successful migration, the
-            # likelier it would be reported as a failure.
             if diff_text:
                 run.diff_key = f"ws/{run_id}/diff.patch"
                 s3_resource.Object(bucket, run.diff_key).put(
@@ -233,10 +168,6 @@ def _compute_verdict(
         except Exception as exc:  # noqa: BLE001
             log_event("core_ops.diff_failed", run_id=run_id, error=str(exc)[:300])
 
-    # Invariant #4, verified rather than assumed: the core re-derives the
-    # approved scope from the strategy manifest and the run's own
-    # restrictions, then checks what actually changed against it. The gate
-    # denies at write time; this catches anything that got through.
     escaped: list[str] = []
     if run.changed_paths:
         try:
@@ -250,14 +181,6 @@ def _compute_verdict(
         except Exception as exc:  # noqa: BLE001
             log_event("core_ops.scope_check_failed", run_id=run_id, error=str(exc)[:300])
 
-    # Dead today: the policy gate denies an out-of-scope write before it
-    # lands, so `escaped` stays empty. That is exactly why it was broken --
-    # `events_table` was never a parameter here, and the branch had never
-    # run. A backstop that raises NameError is worse than none: the whole
-    # verdict computation would fail, the ASL Catch would write a bare
-    # FALLIDO_CONTROLADO with no reason_code, and the SecurityBlocked event
-    # naming the escaped paths -- the one piece of evidence that matters
-    # when the primary control has a hole -- would never be persisted.
     if escaped:
         log_event("core_ops.diff_escaped_scope", run_id=run_id, paths=escaped)
         _persist_denials(
@@ -294,8 +217,6 @@ def _compute_verdict(
     status, reason_code = evaluate_verdict_with_reason(inputs)
     run.reason_code = reason_code
 
-    # Every input the verdict was computed from, so the decision is
-    # auditable without re-running it (CLAUDE.md invariant #1/#10).
     log_event(
         "core_ops.verdict",
         run_id=run_id,

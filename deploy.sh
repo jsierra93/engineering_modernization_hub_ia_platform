@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # Rebuild what changed and apply it.
 #
 #   ./deploy.sh personal                          apply only
@@ -75,7 +76,6 @@ if [[ -n "${SANDBOX_TAG}" ]]; then
   docker tag "modhub-sandbox:${SANDBOX_TAG}" "${REPO_URL}:${SANDBOX_TAG}"
   docker push "${REPO_URL}:${SANDBOX_TAG}" | tail -1
 
-  # The ECR repo is IMMUTABLE, so a rebuilt image always needs a new tag here.
   sed -i -E "s/(sandbox_image_tag[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"${SANDBOX_TAG}\"/" "${ENV_DIR}/main.tf"
   echo "  sandbox_image_tag -> ${SANDBOX_TAG}"
 fi
@@ -98,8 +98,6 @@ if [[ "${PLAN_ONLY}" == "1" ]]; then
 fi
 
 step "terraform apply"
-# Piping straight into grep would report grep's exit status, not
-# terraform's -- a failed apply then looks like a successful deploy.
 APPLY_LOG="$(mktemp)"
 if ! "${TF}" apply -no-color tfplan.out >"${APPLY_LOG}" 2>&1; then
   tail -40 "${APPLY_LOG}"

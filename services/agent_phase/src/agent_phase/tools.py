@@ -1,17 +1,5 @@
-"""The agent's tools -- deliberately small and closed.
-
-Per CLAUDE.md invariant #3 ("There is no free shell in the sandbox") and
-its extension here: there is no generic "run a command" tool at all. The
-model can read, list, write within scope (enforced by the policy gate,
-not by this module), and fetch an allowlisted document. Nothing else
-exists to call.
-
-Built as a factory (`build_tools`) rather than module-level
-`@strands.tool` functions because each run needs its own workspace/gate
-context via closure -- there is no per-call "which run is this" parameter
-on the tools themselves (a model should never be trusted to pass its own
-run_id correctly), so the binding happens once, outside the model's
-control, when the tools are constructed for a given phase invocation.
+"""The agent's closed tool set: read_file, list_files, write_file, fetch_doc. No shell.
+Untrusted content is screened and wrapped before it reaches the model.
 """
 
 from __future__ import annotations

@@ -1,15 +1,5 @@
-"""Thin DynamoDB access layer for the `runs` and `events` tables.
-
-Determinístico zone (CLAUDE.md): this module never imports a Bedrock
-client and never computes a verdict -- it only stores and retrieves what
-core_ops and lambda api need.
-
-Table shapes (mirrored by infrastructure/modules/persistence, owned by a
-different workstream):
-
-- `runs`: partition key `run_id`. GSI `gsi_status` (partition `status`),
-  GSI `gsi_requested_by` (partition `requested_by`).
-- `events`: partition key `run_id`, sort key `seq` (append-only).
+"""DynamoDB access for the runs and events tables.
+Deterministic zone: never imports Bedrock and never computes a verdict.
 """
 
 from __future__ import annotations
@@ -29,23 +19,12 @@ from core_py.models import Event, Run
 
 
 class ApprovalConflictError(Exception):
-    """Raised by `RunsTable.approve_or_reject` when the conditional update
-    fails: the run isn't AWAITING_APPROVAL, `sub` doesn't match
-    `requested_by`, or `plan_hash` is stale. The caller (services/api)
-    maps this to a 409; a 403 identity mismatch is checked separately,
-    before this method is even called, so the two cases stay
-    distinguishable to the API client."""
+    pass
 
 
 def _floats_to_decimal(item: dict[str, Any]) -> dict[str, Any]:
-    """DynamoDB's low-level type serializer rejects Python `float`
-    outright ("use Decimal types instead"). Round-trip through JSON so
-    every float in a (possibly nested) dict becomes a `Decimal`."""
-
     return json.loads(json.dumps(item), parse_float=Decimal)
 
-# Env vars are set by the Terraform modules from the tables they create, so
-# any name_prefix works. The literals are the envs/local (Floci) names.
 DEFAULT_RUNS_TABLE = os.environ.get("RUNS_TABLE_NAME", "modhub-runs")
 DEFAULT_EVENTS_TABLE = os.environ.get("EVENTS_TABLE_NAME", "modhub-events")
 
@@ -59,20 +38,8 @@ def _run_to_item(run: Run) -> dict[str, Any]:
     return _floats_to_decimal(item)
 
 
+# Rows outlive schema versions: unknown attributes are dropped instead of failing the read.
 def _known_fields_only(model: type[BaseModel], item: dict[str, Any]) -> dict[str, Any]:
-    """Drop attributes the current model no longer declares.
-
-    `extra="forbid"` is right for validating a request body -- a typo in a
-    field name should be rejected, not silently ignored. It is wrong for
-    reading rows out of a store that has been written to across schema
-    versions, because that store always holds older shapes. Renaming
-    `Run.diff` to `diff_key` made every previously-written row unreadable
-    and took `GET /runs` down with a 500; the reverse (a new field written
-    by a freshly deployed Lambda, read by one still running the old model)
-    broke a run mid-flight. Both stop here, and a genuine typo on the API
-    surface is still rejected where it matters.
-    """
-
     return {key: value for key, value in item.items() if key in model.model_fields}
 
 
@@ -91,8 +58,6 @@ def _item_to_event(item: dict[str, Any]) -> Event:
 
 
 class RunsTable:
-    """Access to the `runs` table: put/get by primary key, query by GSI."""
-
     def __init__(
         self,
         table_name: str = DEFAULT_RUNS_TABLE,
@@ -126,17 +91,7 @@ class RunsTable:
         return [_item_to_run(item) for item in resp.get("Items", [])]
 
     def add_spend(self, run_id: uuid.UUID | str, delta: float) -> float:
-        """Atomically add `delta` to `spent_usd` and return the new total
-        -- one `update_item`, never a read-then-write race (CLAUDE.md
-        invariant #6).
-
-        Recording is unconditional on purpose. The money is already spent
-        by the time this is called, so refusing the write would only make
-        the ledger forget it: the run would report a spend of 0 for a call
-        that really cost money. Stopping the run is the caller's decision,
-        made by comparing this return value against `max_usd`.
-        """
-
+        # Unconditional on purpose: the money is already spent, so the ledger must record it (invariant 6).
         resp = self._table.update_item(
             Key={"run_id": str(run_id)},
             UpdateExpression="SET spent_usd = spent_usd + :delta",
@@ -146,15 +101,6 @@ class RunsTable:
         return float(resp["Attributes"]["spent_usd"])
 
     def record_pull_request(self, run_id: uuid.UUID | str, *, url: str, branch: str) -> str:
-        """Remember the PR this run produced, and return the URL that ended
-        up stored -- which is the one already there if another call won.
-
-        Conditional on `attribute_not_exists` so two clicks cannot record
-        two different PRs for one run. The loser reads back the winner's
-        URL instead of failing: from the user's side both clicks published
-        the same run, so both should end up looking at the same PR.
-        """
-
         try:
             self._table.update_item(
                 Key={"run_id": str(run_id)},
@@ -172,22 +118,6 @@ class RunsTable:
     def approve_or_reject(
         self, run_id: uuid.UUID | str, *, sub: str, plan_hash: str, new_status: str
     ) -> None:
-        """The design's own "un solo update condicional": status transitions
-        away from AWAITING_APPROVAL only if `sub == requested_by` AND the
-        provided `plan_hash` matches exactly -- in one atomic DynamoDB
-        write, never a read-then-write race between two people approving
-        the same run at once. CLAUDE.md: "quien crea la solicitud es quien
-        la aprueba," enforced here, not just in application logic that a
-        second request could race past.
-
-        Raises `ApprovalConflictError` if the condition fails -- wrong
-        person, wrong state, or a stale plan_hash (the plan changed since
-        the caller last fetched it). The caller (services/api) maps this
-        to 403 (identity mismatch, checked again before calling this so
-        the caller can tell that case apart from a stale hash/state) or
-        409 (state/hash conflict).
-        """
-
         try:
             self._table.update_item(
                 Key={"run_id": str(run_id)},
@@ -213,8 +143,6 @@ class RunsTable:
 
 
 class EventsTable:
-    """Access to the append-only `events` table: append + query by run_id."""
-
     def __init__(
         self,
         table_name: str = DEFAULT_EVENTS_TABLE,
@@ -241,10 +169,6 @@ def create_tables(
     runs_table_name: str = DEFAULT_RUNS_TABLE,
     events_table_name: str = DEFAULT_EVENTS_TABLE,
 ) -> None:
-    """Create the `runs` and `events` tables with a moto/local DynamoDB
-    resource. Used by tests; the real tables are provisioned by Terraform
-    (infrastructure/modules/persistence)."""
-
     resource.create_table(
         TableName=runs_table_name,
         KeySchema=[{"AttributeName": "run_id", "KeyType": "HASH"}],

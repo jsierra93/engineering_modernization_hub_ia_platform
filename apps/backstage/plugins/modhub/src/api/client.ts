@@ -1,3 +1,7 @@
+/*
+ * Client for modhub-backend's proxy routes; attaches a bearer token to every request.
+ */
+
 import { DiscoveryApi } from '@backstage/core-plugin-api';
 import {
   ApprovalInput,
@@ -8,15 +12,6 @@ import {
 } from './types';
 import { ModhubTokenProvider } from './tokenProvider';
 
-/**
- * Calls modhub-backend's proxy routes (plugins/modhub-backend), attaching
- * a bearer token on every request -- this client never talks to
- * modhub/v1 directly, and never holds a service-level credential of its
- * own. Where the token comes from (real OIDC popup vs. a manually-pasted
- * dev token) is entirely `tokenProvider`'s concern -- see
- * ./tokenProvider.ts and apis.ts's modhubApi factory for how that's
- * chosen.
- */
 export class ModhubClient implements ModhubApi {
   constructor(
     private readonly discoveryApi: DiscoveryApi,

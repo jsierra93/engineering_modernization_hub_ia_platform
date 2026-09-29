@@ -1,10 +1,9 @@
 {
-  "Comment": "Engineering Modernization Hub - modernization run state machine. Rendered through Terraform's templatefile() (see ../main.tf) - single-dollar $${...} placeholders (FunctionName/Cluster/TaskDefinition/Subnets/SecurityGroups/AssignPublicIp/Name) are substituted with real ARNs/IDs at plan/apply time; a literal placeholder-looking string appearing only in prose (like this sentence) must instead be double-dollar-escaped so templatefile doesn't try to interpolate it -- learned the hard way, 2026-09-26: terraform validate doesn't fully evaluate templatefile(), only plan/apply does, and an early draft of this file had the two backwards, escaping the REAL placeholders (so they rendered as literal, un-substituted text) instead of the prose. AwaitApproval's core_ops_lambda_arn target is real and wired (task 4.3); Cognito-backed auth in front of the API that calls it is the one remaining Fase-4 gap. Each Task uses its OWN ResultPath (never a shared $.phase_result) so nothing gets clobbered across a chain this long -- Step Functions merges ResultPath additively, so the initial input's run_id/repo/commit/objetivo/strategy_id/max_iterations/iteration survive to the very end automatically. Implement and every Fix iteration deliberately share the SAME ResultPath ($.implement_result) -- there is never a need to distinguish 'the original Implement output' from 'the latest Fix output' downstream, only 'the current workspace state', so reusing one key avoids ASL's lack of a graceful coalesce for a path that may not exist yet (an early design used States.Array/ArrayGetItem to pick between $.fix_result and $.implement_result and it breaks on the very first Verify pass, before any $.fix_result exists -- caught before ever applying it, not in production).",
+  "Comment": "Modernization run state machine, rendered through templatefile() (see ../main.tf).",
   "StartAt": "FetchRepo",
   "States": {
     "FetchRepo": {
       "Type": "Task",
-      "Comment": "Task 2.2-tf. Downloads the tarball at the requested SHA, sanitizes it, writes ws/v0 to S3 (per-file plus one consolidated ws/v0.tar.gz), and returns two presigned URLs -- workspace_get_url and junit_put_url -- since the sandbox has no AWS credentials of any kind (CLAUDE.md invariant #8).",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${fetch_repo_lambda_arn}",
@@ -41,7 +40,6 @@
 
     "Baseline": {
       "Type": "Task",
-      "Comment": "Task 2.3/2.3-tf. Real ECS RunTask.sync running unit_tests against ws/v0, before any change is made. A non-zero container exit makes the .sync integration fail the STATE itself (confirmed empirically, 2026-09-26, against octocat/Hello-World -- Step Functions does not return a successful result with the exit code embedded for a Choice state to inspect) -- Catch routes that to a graceful BLOQUEADO verdict instead of an ugly execution failure.",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
@@ -69,7 +67,7 @@
       },
       "Retry": [
         {
-          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "Comment": "Capacity and throttling only; a non-zero container exit is a real check result.",
           "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
@@ -80,13 +78,11 @@
       "ResultPath": "$.baseline_result",
       "Catch": [
         {
-          "Comment": "A non-zero container exit means the suite really fails on the untouched repo -- BLOQUEADO, and the run stops before the agent is ever asked to modernize something that is already broken.",
           "ErrorEquals": ["States.TaskFailed"],
           "ResultPath": "$.baseline_error",
           "Next": "RecordBaselineBlocked"
         },
         {
-          "Comment": "Everything else -- Fargate capacity, a Spot interruption, a timeout, a bad task definition -- says nothing about the repository. Reporting it as BLOQUEADO would blame the developer's code for the platform's own outage, which is exactly the confusion invariant #11 exists to prevent.",
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
           "Next": "RecordUnrecoverableVerdict"
@@ -97,7 +93,6 @@
 
     "RecordBaselineBlocked": {
       "Type": "Task",
-      "Comment": "The repo's own tests don't pass before any change -- CLAUDE.md/the design: this is BLOQUEADO, never FALLIDO_CONTROLADO. baseline_failed=true short-circuits evaluate_verdict at rule 2, ahead of the suite-integrity/checks logic that would otherwise apply.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -132,7 +127,6 @@
 
 "BaselineLint": {
       "Type": "Task",
-      "Comment": "Lint on the untouched repo. Without it the final lint measures the absolute state, not the effect: a repo that arrives with dead imports would be reported as a partial completion however clean the migration was. Invariant #2 already measures the test suite this way -- lint follows the same rule.",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
@@ -160,7 +154,7 @@
       },
       "Retry": [
         {
-          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "Comment": "Capacity and throttling only; a non-zero container exit is a real check result.",
           "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
@@ -171,7 +165,6 @@
       "ResultPath": "$.baseline_lint_result",
       "Catch": [
         {
-          "Comment": "Includes infrastructure failures on purpose: lint that could not be measured on the baseline is treated as dirty, which only ever removes lint from the verdict.",
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.baseline_lint_error",
           "Next": "MarkBaselineLintDirty"
@@ -189,7 +182,6 @@
 
     "MarkBaselineLintDirty": {
       "Type": "Pass",
-      "Comment": "The repo already failed lint before the agent touched it, so a final lint failure cannot be attributed to this run.",
       "Result": false,
       "ResultPath": "$.baseline_lint_clean",
       "Next": "DiscoveryPlan"
@@ -197,7 +189,6 @@
 
     "DiscoveryPlan": {
       "Type": "Task",
-      "Comment": "Fase 3 (3.3-tf/3.4). Strands + Bedrock Haiku (ModelRole.ANALYSIS). Explores ws/v0, consults docs via fetch_doc, produces a structured DiscoveryPlan. No write_file tool at all for this phase (agent_phase.tools/build_agent's include_write_tool=False) -- it never touches the workspace.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${agent_phase_lambda_arn}",
@@ -236,7 +227,6 @@
 
     "RecordDiscoveryPlanSpend": {
       "Type": "Task",
-      "Comment": "agent_phase has no DynamoDB access (CLAUDE.md permissions table) -- it reports cost_usd, core_ops.record_spend applies it atomically to the run's budget ledger (invariant #6). Not gated on budget_exhausted here: the final compute_verdict re-derives PRESUPUESTO_AGOTADO from the persisted spent_usd regardless, so an early stop is a cost optimization, not a correctness requirement.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -251,7 +241,7 @@
       },
       "Retry": [
         {
-          "Comment": "Only errors that mean the invocation never reached the function: add_spend increments the ledger unconditionally, so retrying a call that may already have run would double-charge the run (invariant #6).",
+          "Comment": "Retry only pre-invocation errors: add_spend is not idempotent, so a repeat would double-charge.",
           "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
@@ -287,7 +277,6 @@
 
     "CheckViability": {
       "Type": "Choice",
-      "Comment": "CLAUDE.md invariant #11: a reasoned 'this cannot be done' is BLOQUEADO with evidence, never silently proceeding to approval/implementation.",
       "Choices": [
         {
           "Variable": "$.discovery_plan_result.plan.viable",
@@ -300,7 +289,6 @@
 
     "RecordInfeasibleVerdict": {
       "Type": "Task",
-      "Comment": "The agent concluded the objective is infeasible during DiscoveryPlan (substantiated by plan.viability_reason, persisted via the phase's own S3 trail) -- BLOQUEADO via evaluate_verdict's agent_concluded_infeasible flag, never inferred, per invariant #11.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -336,7 +324,6 @@
 
     "RecordPlan": {
       "Type": "Task",
-      "Comment": "Task 2.5/2.6-tf integration. plan_hash is computed HERE, by core_ops -- never by the model that proposed the plan (CLAUDE.md: a model asked to compute its own hash could simply be asked to lie about it).",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -371,7 +358,6 @@
 
     "NotifyApprovalPending": {
       "Type": "Task",
-      "Comment": "Task 4.3-tf/4.3. The run just moved to AWAITING_APPROVAL (RecordPlan) -- drop a message on the notifications queue here so Fase 5.4's Backstage bell (via modhub-backend's own scoped SQS identity, task 5.2-tf) can surface it without polling the API. Best-effort by design: the Catch below means a failed send can never block the run itself from reaching approval -- a human can still approve via the API even if this one notification is lost.",
       "Resource": "arn:aws:states:::sqs:sendMessage",
       "Parameters": {
         "QueueUrl": "${notifications_queue_url}",
@@ -394,7 +380,6 @@
 
     "AwaitApproval": {
       "Type": "Task",
-      "Comment": "Fase 4 (4.3), wired. arn:aws:states:::lambda:invoke.waitForTaskToken calls core_ops's record_task_token action, which persists $$.Task.Token onto the Run and returns immediately -- but this state does NOT complete until a much later, separate invocation of POST /runs/{id}/approval (services/api's handle_approval) performs its own conditional write (sub = requested_by, state = AWAITING_APPROVAL, plan_hash match) and calls SendTaskSuccess/SendTaskFailure against that stored token. A rejection (SendTaskFailure) fails this state -- there is deliberately no Catch here: an execution ending in the Step Functions console as FAILED for an operator-rejected plan is the correct, visible signal, distinct from CANCELADO already being recorded on the Run itself by handle_approval.",
       "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -415,7 +400,6 @@
       "TimeoutSeconds": ${approval_timeout_seconds},
       "Catch": [
         {
-          "Comment": "ONLY States.Timeout. A rejection arrives as SendTaskFailure with error=ApprovalRejected and stays uncaught on purpose (see this state's own Comment) -- an execution ending FAILED is the correct, visible signal for an operator-rejected plan. A timeout is different: nobody decided anything, and without this the run would sit in AWAITING_APPROVAL in DynamoDB forever while the execution had already given up.",
           "ErrorEquals": ["States.Timeout"],
           "ResultPath": "$.approval_timeout",
           "Next": "RecordApprovalTimeout"
@@ -427,7 +411,6 @@
 
     "Implement": {
       "Type": "Task",
-      "Comment": "Fase 3 (3.8). Strands + Bedrock Sonnet (ModelRole.CODE), writing only within the approved plan's writable_paths (policy gate enforced). Repackages the workspace afterward (agent_phase.sandbox_handoff) so Verify gets a fresh presigned GET reflecting what was actually written. ResultPath $.implement_result is intentionally reused by Fix below -- see the top-level Comment.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${agent_phase_lambda_arn}",
@@ -469,7 +452,6 @@
 
     "RecordImplementSpend": {
       "Type": "Task",
-      "Comment": "Same pattern as RecordDiscoveryPlanSpend, for the Sonnet/ModelRole.CODE call in Implement.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -484,7 +466,7 @@
       },
       "Retry": [
         {
-          "Comment": "Only errors that mean the invocation never reached the function: add_spend increments the ledger unconditionally, so retrying a call that may already have run would double-charge the run (invariant #6).",
+          "Comment": "Retry only pre-invocation errors: add_spend is not idempotent, so a repeat would double-charge.",
           "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
@@ -520,7 +502,6 @@
 
     "Verify": {
       "Type": "Task",
-      "Comment": "Task 2.3-tf's sandbox, reused for the fix loop (Fase 3.8). Same Catch pattern as Baseline: a failing check fails this state, routed to CheckIterations rather than the execution dying. Always reads from $.implement_result -- populated by Implement on the first pass, overwritten by Fix on every loop iteration after (see top-level Comment).",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
@@ -548,7 +529,7 @@
       },
       "Retry": [
         {
-          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "Comment": "Capacity and throttling only; a non-zero container exit is a real check result.",
           "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
@@ -559,13 +540,11 @@
       "ResultPath": "$.verify_result",
       "Catch": [
         {
-          "Comment": "A non-zero container exit -- a real failing test -- is what the fix loop exists for.",
           "ErrorEquals": ["States.TaskFailed"],
           "ResultPath": "$.verify_error",
           "Next": "CheckIterations"
         },
         {
-          "Comment": "Anything else (ECS capacity, a Spot interruption, a timeout) is not a failing test. Sending it to the fix loop would spend real iterations asking the model to repair code that was never broken.",
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.verdict_error",
           "Next": "RecordUnrecoverableVerdict"
@@ -576,7 +555,6 @@
 
     "CheckIterations": {
       "Type": "Choice",
-      "Comment": "CLAUDE.md's fix loop bound: at most max_iterations corrections, never model-decided.",
       "Choices": [
         {
           "Variable": "$.iteration",
@@ -589,7 +567,6 @@
 
     "Fix": {
       "Type": "Task",
-      "Comment": "Fase 3 (3.8) fix loop. Reads the real JUnit failure from S3 (agent_phase has real, scoped S3 access; the sandbox that produced it does not) and proposes a correction, applied through the same write_file tool and policy gate as Implement. ResultPath deliberately matches Implement's -- see top-level Comment.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${agent_phase_lambda_arn}",
@@ -633,7 +610,6 @@
 
     "RecordFixSpend": {
       "Type": "Task",
-      "Comment": "Same pattern as RecordDiscoveryPlanSpend, for each fix-loop Sonnet call.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -648,7 +624,7 @@
       },
       "Retry": [
         {
-          "Comment": "Only errors that mean the invocation never reached the function: add_spend increments the ledger unconditionally, so retrying a call that may already have run would double-charge the run (invariant #6).",
+          "Comment": "Retry only pre-invocation errors: add_spend is not idempotent, so a repeat would double-charge.",
           "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
@@ -684,7 +660,6 @@
 
     "IncrementIteration": {
       "Type": "Pass",
-      "Comment": "Two states, not one, because ASL has no way to produce a bare number. A Pass whose Parameters build {iteration: n+1} has that OBJECT as its result, so writing it straight back to $.iteration nests it: the next comparison in CheckIterations reads {iteration: 1} where it expects 1, and a Choice state cannot catch the runtime error that follows.",
       "Parameters": {
         "iteration.$": "States.MathAdd($.iteration, 1)"
       },
@@ -694,7 +669,6 @@
 
     "ApplyIteration": {
       "Type": "Pass",
-      "Comment": "InputPath selects the scalar; ResultPath writes it back into the untouched input, so $.iteration stays a number.",
       "InputPath": "$.bump.iteration",
       "ResultPath": "$.iteration",
       "Next": "Verify"
@@ -702,7 +676,6 @@
 
     "RecordUnrecoverableVerdict": {
       "Type": "Task",
-      "Comment": "CLAUDE.md invariant #11: an unhandled agent_phase error (e.g. a Bedrock ThrottlingException, a real possibility once this runs against live Bedrock) is FALLIDO_CONTROLADO with the technical error persisted -- never an opaque failed Step Functions execution the run's own record never reflects, and never inferred as BLOQUEADO (that requires the agent's own substantiated conclusion, not an infra error). Reuses fetch_repo_result.junit_key for both baseline/final: no later JUnit necessarily exists yet, and unrecoverable_error short-circuits evaluate_verdict ahead of the checks/suite-integrity logic anyway.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -738,7 +711,6 @@
 
     "RecordApprovalTimeout": {
       "Type": "Task",
-      "Comment": "Nobody approved within the platform window. FALLIDO_CONTROLADO with reason APPROVAL_TIMED_OUT -- not CANCELADO, which is an explicit human decision, and not PRESUPUESTO_AGOTADO, since approval wait is excluded from max_minutes by design.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -772,7 +744,6 @@
     },
     "ComputeBudgetExhaustedVerdict": {
       "Type": "Task",
-      "Comment": "The recorded spend reached max_usd. evaluate_verdict's rule 1 derives PRESUPUESTO_AGOTADO from the persisted ledger -- no flag is passed in.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -806,7 +777,6 @@
 
     "RecordStuckRun": {
       "Type": "Task",
-      "Comment": "Computing the verdict itself failed. This writes a terminal status and nothing else -- no S3, no JUnit -- so it cannot fail the same way. A run left in RUNNING reads as still working, which is worse than a blunt FALLIDO_CONTROLADO.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -830,7 +800,6 @@
 
     "ComputeExhaustedVerdict": {
       "Type": "Task",
-      "Comment": "max_iterations reached without a passing Verify -- FALLIDO_CONTROLADO via evaluate_verdict's fix_iterations_exhausted_without_pass flag.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -866,7 +835,6 @@
 
     "Lint": {
       "Type": "Task",
-      "Comment": "The strategy's non-blocking check (ruff). It runs as its own sandbox task because the image runs exactly one named check per invocation -- which is why lint was never actually executed before: both Baseline and Verify pass Command [unit_tests], and the ASL simply asserted lint passed.",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "Cluster": "${sandbox_cluster_arn}",
@@ -894,7 +862,7 @@
       },
       "Retry": [
         {
-          "Comment": "Capacity and throttling only. States.TaskFailed is a non-zero container exit -- a real check result -- and retrying it would run the suite again to get the same answer, on the budget.",
+          "Comment": "Capacity and throttling only; a non-zero container exit is a real check result.",
           "ErrorEquals": ["ECS.AmazonECSException", "ECS.ServerException", "ECS.ThrottlingException", "States.TaskFailed.Capacity"],
           "IntervalSeconds": 5,
           "MaxAttempts": 2,
@@ -905,7 +873,6 @@
       "ResultPath": "$.lint_result",
       "Catch": [
         {
-          "Comment": "lint is non-blocking: a failure is COMPLETADO_PARCIALMENTE, never a failed run. Infrastructure failures land here too, on purpose -- lint that could not be measured is reported as not passing rather than assumed green, which understates the result but never overstates it.",
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.lint_error",
           "Next": "CheckBaselineLint"
@@ -916,7 +883,6 @@
 
     "ComputeFinalVerdict": {
       "Type": "Task",
-      "Comment": "Verify and Lint both succeeded. install is true by sound inference, not assertion: the sandbox installs dependencies inside check_unit_tests, so unit_tests cannot pass unless install did. check_suite_integrity (via core_ops comparing baseline vs. this final JUnit) is what can still turn this into FALLIDO_CONTROLADO despite a green run, per CLAUDE.md invariant #2.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -951,7 +917,6 @@
 
     "CheckBaselineLint": {
       "Type": "Choice",
-      "Comment": "A lint failure only counts against the run if the baseline was clean. Otherwise the finding predates the agent and lint drops out of the verdict entirely -- reporting it as failed would blame this run for the repository's existing debt.",
       "Choices": [
         {
           "Variable": "$.baseline_lint_clean",
@@ -964,7 +929,6 @@
 
     "ComputeVerdictLintFailed": {
       "Type": "Task",
-      "Comment": "Blocking checks passed but lint did not -- COMPLETADO_PARCIALMENTE. Identical to ComputeFinalVerdict except for the one flag, because the verdict itself is core_ops's to compute from these inputs, not the state machine's to decide.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",
@@ -999,7 +963,6 @@
 
 "ComputeVerdictLintUnattributable": {
       "Type": "Task",
-      "Comment": "lint is omitted from checks, not reported false: core_ops evaluates only what was measured, and a finding that predates the run was never this run's to answer for. The omission itself is the audit trail.",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${core_ops_lambda_arn}",

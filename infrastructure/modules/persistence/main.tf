@@ -1,23 +1,9 @@
-# infrastructure/modules/persistence
-#
-# Task 1.4-tf (PLAN.md). Deterministic-zone storage only:
-#   - DynamoDB `runs` table, keyed by run_id, with GSIs by `status` and by `requested_by`
-#   - DynamoDB `events` table, keyed by run_id + monotonic sequence
-#   - S3 bucket for ws/vN workspaces, JUnit results, diffs and reports
-#
-# Nothing here grants access to anything — IAM policies that reference these
-# resources live in the modules that need them (orchestration, api, and later
-# core_ops / agent_phase / fetch_repo per CLAUDE.md's per-service IAM philosophy).
+# runs and events DynamoDB tables and the workspaces S3 bucket.
 
 resource "aws_dynamodb_table" "runs" {
   name         = "${var.name_prefix}-runs"
   billing_mode = var.runs_table_billing_mode
-  # NOTE: hash_key/range_key are deprecated in favor of key_schema inside
-  # global_secondary_index/local_secondary_index blocks (see those below) --
-  # but AWS provider v6.66.0 does NOT accept a table-level key_schema block
-  # for the primary key, confirmed by `terraform validate`, not assumed.
-  # hash_key/range_key remain correct here.
-  hash_key = "run_id"
+  hash_key     = "run_id"
 
   attribute {
     name = "run_id"
@@ -34,7 +20,6 @@ resource "aws_dynamodb_table" "runs" {
     type = "S"
   }
 
-  # Sort key shared by both GSIs so lookups can be ordered by recency.
   attribute {
     name = "created_at"
     type = "S"
@@ -88,7 +73,6 @@ resource "aws_dynamodb_table" "events" {
     type = "S"
   }
 
-  # Monotonic per-run sequence number, assigned by the writer (core_ops / orchestration).
   attribute {
     name = "seq"
     type = "N"
@@ -139,8 +123,3 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "workspaces" {
   }
 }
 
-# Bucket layout convention (enforced by application code, not by Terraform):
-#   ws/<run_id>/vN/...      - workspace snapshots per phase
-#   ws/<run_id>/junit/...   - JUnit XML per check
-#   ws/<run_id>/diffs/...   - generated diffs
-#   ws/<run_id>/reports/... - final reports

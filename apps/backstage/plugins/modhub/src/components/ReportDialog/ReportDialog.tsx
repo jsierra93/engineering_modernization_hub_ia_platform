@@ -13,10 +13,6 @@ import { Progress, ResponseErrorPanel } from '@backstage/core-components';
 import { alertApiRef, useApi } from '@backstage/core-plugin-api';
 import { modhubApiRef } from '../../apis';
 
-// The five final states come from the brief verbatim, so none of them can
-// be split. But one state answers "what happened" and not "why": the same
-// FALLIDO_CONTROLADO covers an exhausted fix loop and a weakened test
-// suite. reason_code carries the branch core_ops actually took.
 const REASON_LABEL: Record<string, string> = {
   INFEASIBLE: 'El agente concluyó que la modernización no es viable',
   BASELINE_FAILING: 'El repositorio ya fallaba antes de tocarlo',
@@ -49,8 +45,6 @@ export const ReportDialog = ({ runId, onClose }: Props) => {
     [modhubApi, runId],
   );
 
-  // The report is the durable record; local state only covers the moment
-  // between creating a PR and the next fetch.
   const prUrl = createdPrUrl ?? report?.pull_request_url ?? null;
 
   if (!runId) {

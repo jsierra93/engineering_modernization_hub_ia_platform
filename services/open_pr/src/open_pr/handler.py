@@ -1,14 +1,5 @@
-"""Opens a pull request with what a finished run produced.
-
-The only component that writes outside the platform's own boundary, which
-is why it is a separate Lambda rather than a route on `λ api`: its role
-carries exactly three permissions -- read the GitHub token, read the run,
-read that run's workspace -- and nothing else. It cannot start executions,
-cannot write to DynamoDB, and cannot reach any other bucket prefix.
-
-It is never invoked by the state machine. A human asks for it from the UI
-once they have read the report, so publishing stays a decision rather than
-a side effect of a run finishing.
+"""Opens a GitHub pull request with what a finished run produced.
+Role holds only: read the GitHub token, read the run, read that run's workspace.
 """
 
 from __future__ import annotations
@@ -74,13 +65,6 @@ class GitHub:
         return self._request("GET", f"/repos/{repo}")["default_branch"]
 
     def commit_files(self, repo: str, branch: str, base_sha: str, files: dict[str, bytes], message: str) -> None:
-        """One commit for the whole run, via the Git Data API.
-
-        The Contents API (`PUT /contents/{path}`) is the obvious way to
-        write a file, but it commits on every call -- a run touching three
-        files produced three identical commits. Blobs, one tree and one
-        commit keep the unit of review equal to the unit of work."""
-
         import base64
 
         base_tree = self._request("GET", f"/repos/{repo}/git/commits/{base_sha}")["tree"]["sha"]
@@ -198,9 +182,6 @@ def open_pull_request(
     branch = f"modhub/{run_id[:8]}"
 
     try:
-        # Repairs a run published before the URL was persisted, and covers
-        # a crash between GitHub accepting the PR and DynamoDB recording
-        # it: GitHub, not the platform, is the authority on what exists.
         existing = github.find_pull_request(repo, branch)
         if existing:
             stored = runs_table.record_pull_request(run_id, url=existing, branch=branch)

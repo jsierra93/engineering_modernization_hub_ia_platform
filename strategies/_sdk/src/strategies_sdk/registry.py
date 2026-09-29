@@ -1,11 +1,4 @@
-"""A tiny in-process strategy registry.
-
-CLAUDE.md: "the strategy registry drives GET /modhub/v1/strategies, the
-Scaffolder form and local CLI validation. Never hardcode a strategy list
-anywhere else." This is that registry's minimal, dependency-free form for
-the prototype: strategies register their `manifest()` callable and the
-registry validates it on load.
-"""
+"""In-process strategy registry; validates each manifest on registration."""
 
 from __future__ import annotations
 
@@ -20,12 +13,6 @@ class StrategyRegistry:
         self._manifests: dict[str, StrategyManifest] = {}
 
     def register(self, module: StrategyModule) -> StrategyManifest:
-        """Load, validate and register a strategy module's manifest.
-
-        Raises `strategies_sdk.ManifestValidationError` if the manifest
-        fails validation -- an invalid strategy never enters the catalog.
-        """
-
         manifest = module.manifest()
         if self._ceiling is not None:
             validate_manifest(manifest, self._ceiling)

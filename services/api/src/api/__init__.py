@@ -1,1 +1,2 @@
-"""lambda api -- 11 routes under /modhub/v1."""
+"""lambda api: the modhub/v1 HTTP surface."""
+

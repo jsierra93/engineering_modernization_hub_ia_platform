@@ -1,20 +1,4 @@
-"""Structured-output schemas for each agent_phase phase.
-
-Forcing the model's response into one of these schemas (via Strands'
-`structured_output_model`) is the "Plan-and-Solve" pattern named in the
-design artifact's Uso de IA section: the model commits to a complete,
-parseable plan before a single change is made, rather than deciding
-step-by-step as it goes. It also closes a real failure mode named in the
-artifact's retrospective -- free-text output that breaks `plan_hash`
-computation -- by construction: a `DiscoveryPlan` either validates against
-this schema or the call fails loudly, there is no malformed-but-plausible
-middle ground.
-
-None of these schemas grant the model any authority. `core_ops` (a
-different, Bedrock-free component) is what turns a `DiscoveryPlan` into a
-`plan_hash` and what turns a `FixAttempt`'s test run into a verdict --
-these are just structured requests, never decisions.
-"""
+"""Structured outputs the agent must return for each phase."""
 
 from __future__ import annotations
 

@@ -1,7 +1,4 @@
-# The only component that writes outside the platform. Its role carries
-# exactly three permissions: read the GitHub token, read one run, read that
-# run's produced workspace. No DynamoDB writes, no Step Functions, no
-# Bedrock, no other bucket prefix.
+# open_pr Lambda: reads the GitHub token, the run and its workspace, nothing else.
 
 data "aws_iam_policy_document" "lambda_assume_role" {
   statement {
@@ -41,11 +38,6 @@ data "aws_iam_policy_document" "open_pr_scope" {
     resources = [var.runs_table_arn]
   }
 
-  # UpdateItem exists for one purpose: recording the PR this Lambda just
-  # created. The attribute condition is what keeps it to that -- without
-  # it, "can write the runs table" would mean this Lambda could move a
-  # verdict or an approval state. Kept in its own statement so the
-  # condition applies to the write and never narrows the read.
   statement {
     sid       = "RecordPullRequestOnly"
     effect    = "Allow"

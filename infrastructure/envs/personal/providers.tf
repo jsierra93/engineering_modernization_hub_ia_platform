@@ -12,9 +12,6 @@ terraform {
     }
   }
 
-  # Remote state so the whole environment stays destroyable from any machine
-  # after the demo. No dynamodb_table: state locking would need one on
-  # Terraform 1.8, and this is a single-operator account.
   backend "s3" {
     bucket  = "engineering-modernization-hub-tf-state"
     key     = "personal/terraform.tfstate"

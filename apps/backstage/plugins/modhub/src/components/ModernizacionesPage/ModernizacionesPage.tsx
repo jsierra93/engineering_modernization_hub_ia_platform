@@ -68,13 +68,6 @@ const buildColumns = (
   },
 ];
 
-
-/**
- * Fase 5, task 5.3. Reads real data from modhub/v1 (via modhub-backend's
- * proxy, task 5.2) -- no mock rows. Always `mine=true`: in this MVP a
- * developer can only review and approve their own runs, so offering the
- * other half of the filter would show rows nothing can be done with.
- */
 export const ModernizacionesPage = () => {
   const modhubApi = useApi(modhubApiRef);
   const [createOpen, setCreateOpen] = useState(false);

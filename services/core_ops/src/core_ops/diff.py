@@ -1,6 +1,4 @@
-"""Unified diff between the workspace the run started from and the one it
-produced. Computed here, from what is actually in S3, never from the
-agent's own account of what it changed."""
+"""Unified diff between the baseline (v0) and working (v1) workspaces, computed from S3."""
 
 from __future__ import annotations
 
@@ -32,8 +30,6 @@ def compute_diff(
     baseline_version: str = "v0",
     working_version: str = "v1",
 ) -> tuple[str, list[str]]:
-    """Returns the unified diff and the list of paths that changed."""
-
     before = _read_version(s3_resource, bucket, run_id, baseline_version)
     after = _read_version(s3_resource, bucket, run_id, working_version)
     if not after:

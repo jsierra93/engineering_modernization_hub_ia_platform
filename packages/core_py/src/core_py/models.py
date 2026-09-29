@@ -1,9 +1,5 @@
-"""Pydantic v2 models shared across services.
-
-These mirror the schemas in packages/contracts/openapi.yaml (`Run`,
-`Event`, `StrategyManifest`, ...). The OpenAPI spec is the source of truth
-for the wire shape; these models must round-trip against it (see
-tests/unit/test_models_openapi_roundtrip.py).
+"""Pydantic models mirroring packages/contracts/openapi.yaml (Run, Event, StrategyManifest).
+The OpenAPI spec is the source of truth for the wire shape.
 """
 
 from __future__ import annotations
@@ -21,17 +17,6 @@ def _utcnow() -> datetime:
 
 
 class RunStatus(str, Enum):
-    """The run lifecycle.
-
-    PENDING, AWAITING_APPROVAL and RUNNING are in-flight. CANCELADO is a
-    human decision, not a modernization outcome. The remaining five are
-    the final states core_ops evaluates in this strict order (first match
-    wins), per CLAUDE.md:
-
-        PRESUPUESTO_AGOTADO > BLOQUEADO > FALLIDO_CONTROLADO >
-        COMPLETADO_PARCIALMENTE > LISTO_PARA_REVISION
-    """
-
     PENDING = "PENDING"
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
     RUNNING = "RUNNING"
@@ -43,9 +28,6 @@ class RunStatus(str, Enum):
     LISTO_PARA_REVISION = "LISTO_PARA_REVISION"
 
 
-# The ordered tuple of final states core_ops must evaluate, first match
-# wins. Exposed as a module-level constant (an Enum cannot cleanly hold an
-# aggregate member of its own type).
 FINAL_STATES_ORDER: tuple[RunStatus, ...] = (
     RunStatus.PRESUPUESTO_AGOTADO,
     RunStatus.BLOQUEADO,
@@ -67,18 +49,11 @@ class Restricciones(BaseModel):
 
 
 class Run(BaseModel):
-    """Mirrors `#/components/schemas/Run` in packages/contracts/openapi.yaml."""
-
     model_config = ConfigDict(extra="forbid", use_enum_values=False)
 
     run_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     status: RunStatus = RunStatus.PENDING
     repo: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
-    """`owner/name`, and only that. The value is interpolated straight into
-    a codeload.github.com URL, so a `..` or a slash here walks that path
-    into a different repository. The host is hardcoded, so this is not full
-    SSRF -- but "any repo on GitHub" is still not the same as "the repo the
-    requester named"."""
     commit: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
     objetivo: str = Field(min_length=1)
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -91,55 +66,25 @@ class Run(BaseModel):
     max_minutes: int = Field(ge=1)
     spent_usd: float = 0.0
     models_used: dict[str, str] = Field(default_factory=dict)
-    """Phase -> Bedrock model id that actually served it. The model is
-    platform configuration and can change between runs, so a run has to
-    carry its own answer rather than pointing at today's config."""
     iterations_used: int = 0
     plan_hash: str | None = None
     awaiting_approval_since: datetime | None = None
     approval_wait_seconds: float = 0.0
-    """How long the run sat waiting for a human. Subtracted from elapsed
-    time when the verdict is computed: max_minutes bounds the work, not the
-    deliberation."""
     reason_code: str | None = None
-    """Which branch of evaluate_verdict produced `status`. The five states
-    come from the brief verbatim and cannot be split, but one of them --
-    FALLIDO_CONTROLADO -- covers six conditions, from an exhausted fix loop
-    to a deliberately weakened test suite. A reader cannot tell a platform
-    failure from a security event by the state alone; this is what answers
-    "why" without inventing a sixth state."""
     diff_key: str | None = None
-    """S3 key of the unified diff v0 -> v1, computed by core_ops. The diff
-    itself is never stored on this item: it can run to hundreds of KB and a
-    DynamoDB item tops out at 400 KB. The agent's own account of what it
-    changed is in `plan`; the object this points at is what it actually did."""
     changed_paths: list[str] = Field(default_factory=list)
     pull_request_url: str | None = None
-    """Set once `open_pr` publishes this run. Its presence is what makes
-    publishing idempotent -- the branch existing on GitHub is not a record
-    the platform can read back after a page reload."""
     pull_request_branch: str | None = None
     plan: dict[str, Any] | None = None
-    """The DiscoveryPlan the agent proposed, as approved-or-not. Persisted
-    so a human can read what they are approving -- an approval against a
-    hash alone is not a decision, it is a signature on an unread document.
-    `plan_hash` is still what the approval is checked against."""
     task_token: str | None = None
-    """Step Functions task token for the AwaitApproval callback (Fase 4).
-    Internal only -- never included in a public API response (see
-    services/api/handler.py's get_run, which excludes it explicitly)."""
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
     def model_dump_json_shape(self) -> dict[str, Any]:
-        """`model_dump(mode="json")` with run_id/commit as plain strings,
-        matching the OpenAPI `Run` schema exactly."""
         return self.model_dump(mode="json")
 
 
 class Event(BaseModel):
-    """Mirrors `#/components/schemas/Event`."""
-
     model_config = ConfigDict(extra="forbid")
 
     run_id: uuid.UUID
@@ -151,9 +96,6 @@ class Event(BaseModel):
 
 
 class StrategyLimit(BaseModel):
-    """A single tunable limit: the strategy's own default, and the max a
-    request may raise it to (never above the platform ceiling)."""
-
     model_config = ConfigDict(extra="forbid")
 
     default: float
@@ -169,11 +111,6 @@ class StrategyLimits(BaseModel):
 
 
 class StrategyModelLimits(BaseModel):
-    """Per-role max_tokens, fixed by the strategy -- CLAUDE.md: "Cada
-    llamada lleva un max_tokens de salida fijado por la estrategia, no
-    elegido por el agente." Defaults are conservative, generic values;
-    a strategy overrides them if its own phases need more headroom."""
-
     model_config = ConfigDict(extra="forbid")
 
     analysis_max_tokens: int = 4096
@@ -181,12 +118,6 @@ class StrategyModelLimits(BaseModel):
 
 
 class StrategyManifest(BaseModel):
-    """Mirrors `#/components/schemas/StrategyManifest`.
-
-    `inputs` is a JSON-schema-like dict describing the strategy's own
-    request inputs (validated by strategies/_sdk, not by this model).
-    """
-
     model_config = ConfigDict(extra="forbid")
 
     id: str

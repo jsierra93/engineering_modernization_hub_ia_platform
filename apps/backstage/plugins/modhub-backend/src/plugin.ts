@@ -1,16 +1,13 @@
+/*
+ * Backend plugin: mounts the modhub/v1 proxy and starts the approval-notifications consumer.
+ */
+
 import { coreServices, createBackendPlugin } from '@backstage/backend-plugin-api';
 import { notificationService } from '@backstage/plugin-notifications-node';
 import { signalsServiceRef } from '@backstage/plugin-signals-node';
 import { NotificationsConsumer } from './notificationsConsumer';
 import { createRouter } from './router';
 
-/**
- * Forwards each caller's own Cognito bearer token to modhub/v1, and runs
- * the pump that turns queued approval events into Backstage notifications
- * and live signals.
- *
- * @public
- */
 export const modhubBackendPlugin = createBackendPlugin({
   pluginId: 'modhub-backend',
   register(env) {
@@ -50,7 +47,6 @@ export const modhubBackendPlugin = createBackendPlugin({
           notifications,
           signals,
         });
-        // Not awaited: this polls for the lifetime of the backend.
         consumer.start().catch(error => logger.error(`modhub: consumer stopped: ${error}`));
       },
     });

@@ -1,9 +1,5 @@
-"""Shared Pydantic v2 models, DynamoDB persistence and pricing for the
-Engineering Modernization Hub.
-
-Models here must be derivable from / validated against
-packages/contracts/openapi.yaml -- the OpenAPI spec is the single source
-for the API surface (see CLAUDE.md).
+"""Shared models, persistence, scope and pricing for every service.
+Re-exports the public surface of core_py.
 """
 
 from core_py.bedrock_models import ModelRole, resolve_model_id

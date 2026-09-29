@@ -1,10 +1,4 @@
-"""The strategy Protocol and manifest validation.
-
-Every field in `manifest().limits` is a `{default, max}` pair (see
-`core_py.models.StrategyLimit`). `max` must never exceed the platform
-ceiling passed in -- CLAUDE.md invariant #5: limits resolve through three
-levels that only tighten (platform ceiling >= strategy max >= request).
-"""
+"""Strategy Protocol and manifest validation against the platform ceiling (invariant 5)."""
 
 from __future__ import annotations
 
@@ -16,28 +10,20 @@ from core_py.models import StrategyManifest
 
 @dataclass(frozen=True)
 class PlatformCeiling:
-    """The hard ceiling no strategy manifest may exceed, per CLAUDE.md."""
-
     max_usd: float
     max_iterations: int
     max_minutes: int
 
 
-# CLAUDE.md: "modelar el techo de plataforma como
-# {max_usd: 10, max_iterations: 5, max_minutes: 60}".
 PLATFORM_CEILING = PlatformCeiling(max_usd=10.0, max_iterations=5, max_minutes=60)
 
 
 class ManifestValidationError(ValueError):
-    """A strategy manifest violates the SDK schema or the platform ceiling."""
+    pass
 
 
 @runtime_checkable
 class StrategyModule(Protocol):
-    """The contract a strategy package under `strategies/<name>/` must
-    satisfy: a single `manifest()` callable returning a `StrategyManifest`.
-    """
-
     def manifest(self) -> StrategyManifest: ...
 
 
@@ -45,14 +31,6 @@ _LIMIT_FIELDS = ("max_usd", "max_iterations", "max_minutes")
 
 
 def _validate_inputs_schema(inputs: dict[str, Any]) -> list[str]:
-    """Validate the JSON-schema-like `inputs` dict.
-
-    Each entry must at minimum declare a `type`. This is intentionally
-    permissive (a real JSON Schema validator is out of scope for the
-    prototype) but catches the shapes that would silently break a
-    strategy's own request-input validation later.
-    """
-
     errors: list[str] = []
     if not isinstance(inputs, dict):
         return ["inputs must be an object"]
@@ -73,15 +51,6 @@ def validate_manifest(
     manifest: StrategyManifest,
     ceiling: PlatformCeiling = PLATFORM_CEILING,
 ) -> None:
-    """Raise `ManifestValidationError` if `manifest` is invalid.
-
-    Checks:
-    - `inputs` matches the JSON-schema-like shape the SDK expects.
-    - every `limits.<field>.max` does not exceed the platform ceiling.
-    - every `limits.<field>.default` does not exceed that field's own max.
-    - `checks`, `writable_paths` and `sources` are non-empty.
-    """
-
     errors: list[str] = []
 
     errors.extend(_validate_inputs_schema(manifest.inputs))

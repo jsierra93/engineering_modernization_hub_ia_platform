@@ -1,25 +1,9 @@
-# infrastructure/modules/agent-phase
-#
-# Tasks 3.3-tf/3.4/3.5/3.8 (PLAN.md). lambda agent_phase is the ONE
-# exception to "core_ops never talks to Bedrock" running in reverse: this
-# is the LLM-zone Lambda that DOES get bedrock:InvokeModel, scoped to
-# exactly the model IDs core_py.bedrock_models resolves -- never a
-# wildcard across all foundation models. It also gets its own run's S3
-# workspace access (see variables.tf's note on the real per-run boundary
-# living in code, not IAM) and permission to invoke exactly one other
-# Lambda: fetch_doc.
-#
-# It does NOT get: DynamoDB access (core_ops owns the verdict/ledger),
-# SendTaskSuccess (Step Functions itself calls that, not this Lambda), or
-# any permission beyond what a single phase invocation needs to propose,
-# never decide.
+# agent_phase Lambda: the only role with bedrock:InvokeModel, scoped to the resolved model ARNs.
 
 data "aws_partition" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  # Claude 4.5 models are INFERENCE_PROFILE-only: IAM needs the profile ARN
-  # plus the underlying model in any region the profile may route to.
   model_ids = compact([var.analysis_model_id, var.code_model_id])
 
   model_arns = concat(
@@ -36,13 +20,6 @@ locals {
   guardrail_version = var.create_guardrail ? aws_bedrock_guardrail.prompt_attack[0].version : null
 }
 
-# Task 3.7-tf. CLAUDE.md's retrospective names this as the missing second
-# layer behind the untrusted-content prompt delimiting (Layer 1, in
-# agent_phase.untrusted) -- a Guardrail catching a prompt-attack pattern
-# the model itself might still comply with. PROMPT_ATTACK is Bedrock's own
-# filter type for exactly this (jailbreak/injection attempts), distinct
-# from the content-safety filters (HATE, VIOLENCE, ...) this prototype has
-# no particular need for beyond a conservative default.
 resource "aws_bedrock_guardrail" "prompt_attack" {
   count = var.create_guardrail ? 1 : 0
 
@@ -108,8 +85,6 @@ data "aws_iam_policy_document" "agent_phase_lambda_scope" {
     resources = ["${var.workspaces_bucket_arn}/ws/*"]
   }
 
-  # s3:ListBucket is a bucket-level action: on an object ARN it can never
-  # match. Scoped by prefix condition instead, so this stays limited to ws/.
   statement {
     sid       = "ListWorkspacePrefixOnly"
     effect    = "Allow"
@@ -170,20 +145,15 @@ resource "aws_lambda_function" "agent_phase" {
       {
         MODHUB_WORKSPACE_BUCKET        = var.workspaces_bucket_name
         MODHUB_FETCH_DOC_FUNCTION_NAME = var.fetch_doc_lambda_name
-        # Same vars that scope the IAM policy above, so invoked and allowed
-        # models cannot drift.
-        BEDROCK_MODEL_ANALYSIS = var.analysis_model_id
+        BEDROCK_MODEL_ANALYSIS         = var.analysis_model_id
       },
       var.code_model_id == null ? {} : {
         BEDROCK_MODEL_CODE = var.code_model_id
       },
-      # agent_phase now refuses to run without a guardrail unless the
-      # opt-out is explicit: a missing variable used to remove Layer 2 in
-      # silence. If no guardrail is created, explicitly opt out.
       var.create_guardrail ? {
         MODHUB_BEDROCK_GUARDRAIL_ID      = local.guardrail_id
         MODHUB_BEDROCK_GUARDRAIL_VERSION = local.guardrail_version
-      } : {
+        } : {
         MODHUB_GUARDRAIL_OPTIONAL = "true"
       },
       var.extra_environment_variables

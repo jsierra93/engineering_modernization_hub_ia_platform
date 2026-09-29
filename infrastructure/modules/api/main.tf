@@ -1,26 +1,4 @@
-# infrastructure/modules/api
-#
-# Task 1.6-tf (PLAN.md). lambda api + an API Gateway HTTP API (v2) in front
-# of it, with routes for:
-#   POST /modhub/v1/runs
-#   GET  /modhub/v1/runs/{run_id}
-#
-# No JWT authorizer yet - that is Fase 4 task 4.2-tf, explicitly out of scope
-# here. The routes are open on purpose until then.
-#
-# The Lambda deployment artifact is a Python-side concern being built in
-# parallel (see PLAN.md 1.6); this module stays structurally correct by
-# zipping a local placeholder handler via data.archive_file until
-# var.lambda_source_dir is pointed at the real build output.
-#
-# IAM for this Lambda's execution role is scoped to exactly:
-#   - dynamodb:PutItem / GetItem / Query / UpdateItem on the runs table
-#   - dynamodb:Query on the events table (read-only; the report carries the
-#     run's SecurityBlocked events)
-#   - s3:GetObject on ws/*/diff.patch and nothing else in that bucket
-#   - states:StartExecution / SendTaskSuccess / SendTaskFailure
-#   - bedrock:InvokeModel on the ANALYSIS model only -- CLAUDE.md's one
-#     documented Bedrock exception, the objective-to-strategy resolver.
+# lambda api behind an HTTP API with optional JWT authorizer, plus routes and access logs.
 
 locals {
   lambda_source_dir  = coalesce(var.lambda_source_dir, "${path.module}/placeholder_src")
@@ -28,11 +6,6 @@ locals {
   lambda_filename    = local.use_prebuilt_zip ? var.lambda_package_zip_path : data.archive_file.lambda_package[0].output_path
   lambda_source_hash = local.use_prebuilt_zip ? filebase64sha256(var.lambda_package_zip_path) : data.archive_file.lambda_package[0].output_base64sha256
 
-  # Fase 4, task 4.4-tf: the one documented Bedrock exception (see
-  # CLAUDE.md) -- scoped to exactly the ANALYSIS model create_run's
-  # resolver actually invokes, never bedrock:* across every model.
-  # Two ARNs when the ID is an inference profile -- see
-  # modules/agent-phase/main.tf.
   analysis_model_bare_id = replace(var.analysis_model_id, "/^(us|eu|apac|global)\\./", "")
 
   analysis_model_arns = compact([
@@ -88,9 +61,6 @@ data "aws_iam_policy_document" "api_lambda_scope" {
       "dynamodb:PutItem",
       "dynamodb:GetItem",
       "dynamodb:Query",
-      # UpdateItem: handle_approval's atomic conditional write
-      # (RunsTable.approve_or_reject, Fase 4 task 4.3) -- the one other
-      # write this Lambda ever performs on the runs table.
       "dynamodb:UpdateItem",
     ]
     resources = [
@@ -106,9 +76,6 @@ data "aws_iam_policy_document" "api_lambda_scope" {
     resources = [var.events_table_arn, "${var.events_table_arn}/index/*"]
   }
 
-  # The only S3 access this Lambda has, and the narrowest shape that works:
-  # one object name under every run's prefix. It cannot read a workspace,
-  # a JUnit report or anything else in the bucket, and it cannot write.
   statement {
     sid       = "ReadRunDiffOnly"
     effect    = "Allow"
@@ -124,23 +91,15 @@ data "aws_iam_policy_document" "api_lambda_scope" {
   }
 
   statement {
-    sid    = "CompleteApprovalCallback"
-    effect = "Allow"
-    # handle_approval (Fase 4, task 4.3) calls these against the task
-    # token AwaitApproval recorded -- Step Functions supports
-    # resource-level scoping for both actions to the state machine ARN
-    # itself, so this is not left at "*".
+    sid       = "CompleteApprovalCallback"
+    effect    = "Allow"
     actions   = ["states:SendTaskSuccess", "states:SendTaskFailure"]
     resources = [var.state_machine_arn]
   }
 
   statement {
-    sid    = "ResolveObjectiveToStrategy"
-    effect = "Allow"
-    # CLAUDE.md's one documented Bedrock exception (create_run's
-    # objective->strategy resolver, services/api/src/api/resolver.py).
-    # Scoped to exactly the ANALYSIS model -- this Lambda gets no other
-    # Bedrock permission, ever.
+    sid       = "ResolveObjectiveToStrategy"
+    effect    = "Allow"
     actions   = ["bedrock:InvokeModel"]
     resources = local.analysis_model_arns
   }
@@ -173,15 +132,11 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = merge(
       {
-        RUNS_TABLE_NAME = var.runs_table_name
-        # Name matches services/api/src/api/handler.py's
-        # STATE_MACHINE_ARN_ENV constant exactly - do not rename without
-        # checking that file (owned by the Python agent, read-only here).
+        RUNS_TABLE_NAME          = var.runs_table_name
         MODHUB_STATE_MACHINE_ARN = var.state_machine_arn
-        # Same var that scopes the InvokeModel policy above.
-        BEDROCK_MODEL_ANALYSIS = var.analysis_model_id
-        MODHUB_WORKSPACE_BUCKET = var.workspaces_bucket_name
-        EVENTS_TABLE_NAME       = var.events_table_name
+        BEDROCK_MODEL_ANALYSIS   = var.analysis_model_id
+        MODHUB_WORKSPACE_BUCKET  = var.workspaces_bucket_name
+        EVENTS_TABLE_NAME        = var.events_table_name
       },
       var.extra_environment_variables
     )
@@ -216,10 +171,6 @@ resource "aws_apigatewayv2_integration" "api_lambda" {
   payload_format_version = "2.0"
 }
 
-# Task 4.2-tf. JWT authorizer over every route -- api's own
-# _requested_by() already reads requestContext.authorizer.jwt.claims.sub
-# first (falling back to an x-requested-by header only when no authorizer
-# ran), so no Python change was needed once this is wired in.
 resource "aws_apigatewayv2_authorizer" "jwt" {
   count = var.enable_jwt_authorizer ? 1 : 0
 
@@ -240,7 +191,7 @@ resource "aws_apigatewayv2_route" "create_run" {
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 
   authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
-  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  authorizer_id      = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
 }
 
 resource "aws_apigatewayv2_route" "get_run" {
@@ -249,7 +200,7 @@ resource "aws_apigatewayv2_route" "get_run" {
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 
   authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
-  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  authorizer_id      = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
 }
 
 resource "aws_apigatewayv2_route" "get_report" {
@@ -267,7 +218,7 @@ resource "aws_apigatewayv2_route" "list_runs" {
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 
   authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
-  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  authorizer_id      = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
 }
 
 resource "aws_apigatewayv2_route" "approve_run" {
@@ -276,7 +227,7 @@ resource "aws_apigatewayv2_route" "approve_run" {
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 
   authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
-  authorizer_id       = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  authorizer_id      = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
 }
 
 resource "aws_cloudwatch_log_group" "api_gateway_access_logs" {

@@ -1,16 +1,12 @@
-/**
- * Mirrors packages/contracts/openapi.yaml's Run/StrategyManifest shapes
- * closely enough for the frontend's own needs -- this plugin does not
- * generate types from the OpenAPI spec (out of scope for this pass), so
- * keep this in sync by hand if the contract changes.
+/*
+ * Frontend types mirroring packages/contracts/openapi.yaml; kept in sync by hand.
  */
+
 export interface PlannedFileChange {
   path: string;
   reason: string;
 }
 
-/** agent_phase.schemas.DiscoveryPlan, persisted on the Run by core_ops so
- * an approver can read what they are approving. */
 export interface DiscoveryPlan {
   viable: boolean;
   viability_reason: string;
@@ -55,8 +51,6 @@ export interface ApprovalInput {
   reason?: string;
 }
 
-/** services/api/handler.py's create_run response shape -- narrower than
- * the full Run record (see that handler's own _ok_response call). */
 export interface CreateRunResponse {
   run_id: string;
   status: string;

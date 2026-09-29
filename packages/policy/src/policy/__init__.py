@@ -1,5 +1,2 @@
-"""Policy gate (Strands hooks) + Cedar policies.
+"""Reserved for the policy gate and Cedar policies; the live gate is agent_phase/policy_gate.py."""
 
-Real logic lands in Fase 3 of PLAN.md (3.5/3.6). Out of scope for this
-scaffolding pass.
-"""

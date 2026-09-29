@@ -1,16 +1,8 @@
-# infrastructure/envs/personal
-#
-# Composition root for the personal prototype environment. Wires together
-# the persistence (1.4-tf), orchestration (1.5-tf), api (1.6-tf),
-# sandbox-network (2.1-tf), fetch-repo (2.2-tf), core-ops (2.6-tf),
-# fetch_doc/agent_phase (Fase 3) and identity/notifications (Fase 4)
-# modules.
+# Personal AWS environment: wires every module together.
 
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 
-  # x86_64, not the modules' arm64 default: build_lambda.sh's arm64 cross
-  # build silently drops dependencies under QEMU on an x86 host.
   api_package_path         = "${path.module}/../../scripts/build/api_lambda_x86_64.zip"
   fetch_repo_package_path  = "${path.module}/../../scripts/build/fetch_repo_lambda_x86_64.zip"
   core_ops_package_path    = "${path.module}/../../scripts/build/core_ops_lambda_x86_64.zip"
@@ -20,12 +12,7 @@ locals {
 
   lambda_architectures = ["x86_64"]
 
-  # Inference-profile ids, not bare model ids: Claude 4.5 models report no
-  # ON_DEMAND support, so InvokeModel against a bare id fails.
   analysis_model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-  # Sonnet needs an AWS Marketplace subscription this account does not have
-  # (ConverseStream returns AccessDeniedException). Haiku for both roles
-  # until that is granted -- the split exists, it just points at one model.
   code_model_id     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
   common_tags = {
@@ -38,23 +25,19 @@ locals {
 module "persistence" {
   source = "../../modules/persistence"
 
-  name_prefix = local.name_prefix
-  tags        = local.common_tags
-  # Throwaway demo env: the whole thing must stay destroyable after runs
-  # have written workspace artifacts.
+  name_prefix      = local.name_prefix
+  tags             = local.common_tags
   s3_force_destroy = true
 }
 
 module "sandbox_network" {
   source = "../../modules/sandbox-network"
 
-  name_prefix = local.name_prefix
-  tags        = local.common_tags
-  aws_region  = var.aws_region
+  name_prefix          = local.name_prefix
+  tags                 = local.common_tags
+  aws_region           = var.aws_region
   sandbox_architecture = "x86_64"
   ecr_force_delete     = true
-  # Pushed by hand to the repo this module creates; the repo is IMMUTABLE,
-  # so a rebuilt image needs a new tag here.
   sandbox_image_tag    = "v4"
 }
 
@@ -82,8 +65,6 @@ module "orchestration" {
   core_ops_lambda_arn         = module.core_ops.lambda_function_arn
   notifications_queue_arn     = module.notifications.queue_arn
   notifications_queue_url     = module.notifications.queue_url
-  # sandbox_assign_public_ip defaults to true - correct for the public
-  # network mode (no NAT gateway) this module builds.
 }
 
 module "identity" {
@@ -114,17 +95,13 @@ module "api" {
   open_pr_lambda_invoke_arn    = module.open_pr.lambda_invoke_arn
   open_pr_lambda_function_name = module.open_pr.lambda_function_name
 
-  # Invariant #7 asks for recent auth before approving. 300s is the real
-  # value; 3600 is a concession to the fixed dev token, whose auth_time is
-  # frozen when start-backstage.sh mints it and cannot be refreshed while
-  # the browser OIDC flow is blocked (PLAN.md 5.6). Restore 300 once it is.
   extra_environment_variables = {
     MODHUB_APPROVAL_MAX_AUTH_AGE_SECONDS = "3600"
   }
 
   enable_jwt_authorizer = true
-  jwt_issuer             = module.identity.issuer_url
-  jwt_audience           = [module.identity.cli_client_id, module.identity.backstage_client_id]
+  jwt_issuer            = module.identity.issuer_url
+  jwt_audience          = [module.identity.cli_client_id, module.identity.backstage_client_id]
 }
 
 module "open_pr" {
