@@ -10,7 +10,8 @@ from __future__ import annotations
 import boto3
 import pytest
 from core_py.models import Restricciones, Run, RunStatus
-from core_py.persistence import RunsTable, create_tables
+from core_py.persistence import RunsTable
+from support_tables import create_tables
 from moto import mock_aws
 
 from core_ops.handler import UnknownActionError, _run

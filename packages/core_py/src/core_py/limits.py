@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 
-from core_py.models import StrategyLimits
+from core_py.strategy_models import StrategyLimits
 
 LIMIT_FIELDS: tuple[str, ...] = ("max_usd", "max_iterations", "max_minutes")
 

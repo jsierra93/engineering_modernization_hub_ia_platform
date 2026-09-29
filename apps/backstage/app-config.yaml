@@ -159,9 +159,8 @@ proxy:
 modhub:
   baseUrl: ${MODHUB_API_BASE_URL}
   # Unset -> each caller's own Cognito token is forwarded (the real OIDC
-  # flow, what `start-backstage.sh personal` does). Set -> that fixed token
-  # is used instead, which is the only way to reach the API on Floci, whose
-  # OIDC discovery document has no authorization_endpoint.
+  # flow). Set -> that fixed token is used for every request; start-backstage.sh
+  # sets it until the browser OIDC login works.
   devToken: ${MODHUB_DEV_TOKEN}
   notificationsQueueUrl: ${MODHUB_NOTIFICATIONS_QUEUE_URL}
   awsRegion: ${MODHUB_AWS_REGION}

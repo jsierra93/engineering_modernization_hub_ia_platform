@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core_py.models import StrategyManifest
+from core_py.strategy_models import StrategyManifest
 
 from strategies_sdk.sdk import PlatformCeiling, StrategyModule, validate_manifest
 

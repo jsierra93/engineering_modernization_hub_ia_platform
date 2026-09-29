@@ -1,4 +1,4 @@
-"""Resolves a logical model role (ANALYSIS, CODE) to a Bedrock model ID.
+"""Resolves a logical model role (ANALYSIS, CODE, RESOLVER) to a Bedrock model ID.
 Order: override argument > environment variable. No model is named in code; Terraform owns the choice.
 """
 
@@ -13,10 +13,13 @@ class ModelRole(str, Enum):
 
     CODE = "code"
 
+    RESOLVER = "resolver"
+
 
 _ENV_VAR_BY_ROLE: dict[ModelRole, str] = {
     ModelRole.ANALYSIS: "BEDROCK_MODEL_ANALYSIS",
     ModelRole.CODE: "BEDROCK_MODEL_CODE",
+    ModelRole.RESOLVER: "BEDROCK_MODEL_RESOLVER",
 }
 
 

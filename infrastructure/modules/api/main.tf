@@ -1,12 +1,12 @@
 # lambda api behind an HTTP API with optional JWT authorizer, plus routes and access logs.
 
 locals {
-  analysis_model_bare_id = replace(var.analysis_model_id, "/^(us|eu|apac|global)\\./", "")
+  resolver_model_bare_id = replace(var.resolver_model_id, "/^(us|eu|apac|global)\\./", "")
 
-  analysis_model_arns = compact([
-    "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${local.analysis_model_bare_id}",
-    local.analysis_model_bare_id != var.analysis_model_id
-    ? "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.analysis_model_id}"
+  resolver_model_arns = compact([
+    "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${local.resolver_model_bare_id}",
+    local.resolver_model_bare_id != var.resolver_model_id
+    ? "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.resolver_model_id}"
     : "",
   ])
 }
@@ -30,7 +30,7 @@ module "lambda" {
     {
       RUNS_TABLE_NAME          = var.runs_table_name
       MODHUB_STATE_MACHINE_ARN = var.state_machine_arn
-      BEDROCK_MODEL_ANALYSIS   = var.analysis_model_id
+      BEDROCK_MODEL_RESOLVER   = var.resolver_model_id
       MODHUB_WORKSPACE_BUCKET  = var.workspaces_bucket_name
       EVENTS_TABLE_NAME        = var.events_table_name
 
@@ -108,7 +108,7 @@ data "aws_iam_policy_document" "api_lambda_scope" {
     sid       = "ResolveObjectiveToStrategy"
     effect    = "Allow"
     actions   = ["bedrock:InvokeModel"]
-    resources = local.analysis_model_arns
+    resources = local.resolver_model_arns
   }
 }
 

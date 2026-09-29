@@ -12,7 +12,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from core_py.bedrock_models import ModelRole, resolve_model_id
 from core_py.observability import log_event
-from core_py.models import StrategyManifest
+from core_py.strategy_models import StrategyManifest
 
 _SYSTEM_PROMPT = (
     "You match a free-text software-modernization objective to exactly "
@@ -63,7 +63,7 @@ def resolve_strategy(
     if not candidates:
         raise NoStrategyMatchError("no strategies are registered")
 
-    resolved_model_id = resolve_model_id(ModelRole.ANALYSIS, override=model_id)
+    resolved_model_id = resolve_model_id(ModelRole.RESOLVER, override=model_id)
     by_id = {manifest.id: manifest for manifest in candidates}
     catalog = [
         {"id": manifest.id, "title": manifest.title, "description": manifest.description, "ecosystem": manifest.ecosystem}

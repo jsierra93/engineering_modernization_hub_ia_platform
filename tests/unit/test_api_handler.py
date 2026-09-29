@@ -16,7 +16,8 @@ from moto import mock_aws
 
 from api.handler import create_run, get_run, handle_approval, list_runs
 from core_py.models import Restricciones, Run, RunStatus
-from core_py.persistence import RunsTable, create_tables
+from core_py.persistence import RunsTable
+from support_tables import create_tables
 
 
 @pytest.fixture()

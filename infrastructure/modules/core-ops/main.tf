@@ -83,6 +83,17 @@ data "aws_iam_policy_document" "core_ops_lambda_scope" {
   }
 
   statement {
+    sid     = "WriteWorkingCopyAndSandboxHandoff"
+    effect  = "Allow"
+    actions = ["s3:PutObject"]
+    resources = [
+      "${var.workspaces_bucket_arn}/ws/*/v1/*",
+      "${var.workspaces_bucket_arn}/ws/*/v1.tar.gz",
+      "${var.workspaces_bucket_arn}/ws/*/junit/*",
+    ]
+  }
+
+  statement {
     sid       = "ListWorkspacePrefixOnly"
     effect    = "Allow"
     actions   = ["s3:ListBucket"]

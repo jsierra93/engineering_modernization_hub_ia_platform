@@ -6,7 +6,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from core_py.constants import CHECK_VOCABULARY
 from core_py.limits import LIMIT_FIELDS, PlatformCeiling, platform_ceiling
-from core_py.models import StrategyManifest
+from core_py.strategy_models import StrategyManifest
 
 PLATFORM_CEILING = platform_ceiling()
 

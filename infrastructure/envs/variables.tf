@@ -10,6 +10,12 @@ variable "analysis_model_id" {
   default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
+variable "resolver_model_id" {
+  description = "Bedrock model ID (or inference profile) for ModelRole.RESOLVER, the objective-to-strategy classifier in λ api. A small, cheap model is enough: it needs no tools and its answer is checked against the closed candidate list. It is not part of a run's spend, so it needs no model_pricing entry."
+  type        = string
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+}
+
 variable "code_model_id" {
   description = "Bedrock model ID (or inference profile) for ModelRole.CODE. Any model works as long as it has an entry in model_pricing."
   type        = string
@@ -17,15 +23,42 @@ variable "code_model_id" {
 }
 
 variable "model_pricing" {
-  description = "USD per 1k tokens for every model ID used above, keyed exactly as configured. Versioned by hand; the budget ledger depends on it."
+  description = <<-EOT
+    USD per 1k tokens for every model ID used above, keyed exactly as configured. Versioned by hand; the budget ledger depends on it.
+    Base rates (per million tokens): Claude Haiku 4.5 $1 in / $5 out; Claude Sonnet 4.6 $3 in / $15 out
+    (https://platform.claude.com/docs/en/about-claude/pricing, 2026-09-29). On Bedrock, regional profiles (`us.`, `eu.`, ...)
+    carry a 10% premium over `global.` profiles for these models, so the `us.` entries are base x 1.1.
+    Every model is on-demand, billed per token with no monthly fee. Sonnet 4.6 is the second option: it answers in this
+    account on both profiles (checked 2026-09-29; Sonnet 4.5 answers too, but 4.6 is the newer one at the same price;
+    Sonnet 5 / 5.5 are not available to the account). Re-check the rates against the AWS Bedrock pricing page before relying
+    on them for a real budget.
+  EOT
   type = map(object({
     input_usd_per_1k  = number
     output_usd_per_1k = number
   }))
   default = {
     "us.anthropic.claude-haiku-4-5-20251001-v1:0" = {
+      input_usd_per_1k  = 0.0011
+      output_usd_per_1k = 0.0055
+    }
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0" = {
       input_usd_per_1k  = 0.001
       output_usd_per_1k = 0.005
+    }
+    "us.anthropic.claude-sonnet-4-6" = {
+      input_usd_per_1k  = 0.0033
+      output_usd_per_1k = 0.0165
+    }
+    "global.anthropic.claude-sonnet-4-6" = {
+      input_usd_per_1k  = 0.003
+      output_usd_per_1k = 0.015
+    }
+    # Not usable yet: the account gets "not available for this account" on Converse and InvokeModel (checked 2026-09-29).
+    # Only a global profile exists, so there is no regional premium. Its newer tokenizer yields about 30% more tokens per text.
+    "global.anthropic.claude-sonnet-5-5" = {
+      input_usd_per_1k  = 0.002
+      output_usd_per_1k = 0.010
     }
   }
 }

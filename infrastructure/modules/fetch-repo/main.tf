@@ -1,22 +1,4 @@
-# fetch_repo Lambda and the GitHub token secret container (value is set out of band).
-
-resource "aws_secretsmanager_secret" "github_token" {
-  name        = "${var.name_prefix}-fetch-repo-github-token"
-  description = "GitHub token used by lambda fetch_repo. Real value set out-of-band by a human -- NEVER via Terraform or git."
-
-  tags = merge(var.tags, {
-    Name = "${var.name_prefix}-fetch-repo-github-token"
-  })
-}
-
-resource "aws_secretsmanager_secret_version" "github_token" {
-  secret_id     = aws_secretsmanager_secret.github_token.id
-  secret_string = "REPLACE_OUT_OF_BAND_NOT_A_REAL_TOKEN"
-
-  lifecycle {
-    ignore_changes = [secret_string]
-  }
-}
+# fetch_repo Lambda: downloads public repositories with no credentials; it holds no secret.
 
 module "lambda" {
   source = "../lambda-function"
@@ -33,7 +15,6 @@ module "lambda" {
   environment = merge(
     {
       MODHUB_WORKSPACE_BUCKET = var.workspaces_bucket_name
-      GITHUB_TOKEN_SECRET_ARN = aws_secretsmanager_secret.github_token.arn
     },
     var.extra_environment_variables
   )
@@ -68,13 +49,6 @@ data "aws_iam_policy_document" "fetch_repo_lambda_scope" {
       "s3:GetObject",
     ]
     resources = ["${var.workspaces_bucket_arn}/ws/*"]
-  }
-
-  statement {
-    sid       = "GithubTokenSecretOnly"
-    effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.github_token.arn]
   }
 }
 

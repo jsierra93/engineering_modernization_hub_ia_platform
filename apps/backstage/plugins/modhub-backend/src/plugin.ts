@@ -5,7 +5,7 @@
 import { coreServices, createBackendPlugin } from '@backstage/backend-plugin-api';
 import { notificationService } from '@backstage/plugin-notifications-node';
 import { signalsServiceRef } from '@backstage/plugin-signals-node';
-import { NotificationsConsumer } from './notificationsConsumer';
+import { startApprovalNotifications } from './notifications';
 import { createRouter } from './router';
 
 export const modhubBackendPlugin = createBackendPlugin({
@@ -34,20 +34,7 @@ export const modhubBackendPlugin = createBackendPlugin({
           allow: 'unauthenticated',
         });
 
-        const queueUrl = config.getOptionalString('modhub.notificationsQueueUrl');
-        if (!queueUrl) {
-          logger.info('modhub.notificationsQueueUrl unset -- approval notifications disabled');
-          return;
-        }
-
-        const consumer = new NotificationsConsumer({
-          queueUrl,
-          region: config.getString('modhub.awsRegion'),
-          logger,
-          notifications,
-          signals,
-        });
-        consumer.start().catch(error => logger.error(`modhub: consumer stopped: ${error}`));
+        startApprovalNotifications({ config, logger, notifications, signals });
       },
     });
   },

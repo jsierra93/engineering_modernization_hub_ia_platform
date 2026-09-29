@@ -5,14 +5,17 @@ Returns presigned URLs so the credential-less sandbox can fetch the workspace an
 from __future__ import annotations
 
 import io
-import tarfile
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from core_py.constants import BASELINE_VERSION, PRESIGNED_URL_TTL_SECONDS
+from core_py.constants import BASELINE_VERSION
 from core_py.constants import WORKSPACE_BUCKET_ENV as DEFAULT_WORKSPACE_BUCKET_ENV
 
-from fetch_repo.sanitize import TarSanitizationError, iter_sanitized_members
+from core_py.workspace import build_archive, presign_sandbox_io, store_archive, version_prefix
+
+from fetch_repo.sanitize import iter_sanitized_members
+
+BASELINE_JUNIT_FILENAME = "unit_tests.xml"
 
 
 
@@ -39,16 +42,6 @@ def _tarball_url(repo: str, commit: str) -> str:
     return f"https://codeload.github.com/{repo}/tar.gz/{commit}"
 
 
-def build_consolidated_archive(members: list) -> bytes:
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        for member in members:
-            info = tarfile.TarInfo(name=member.path)
-            info.size = len(member.data)
-            archive.addfile(info, io.BytesIO(member.data))
-    return buffer.getvalue()
-
-
 def fetch_and_store_repo(
     run_id: str,
     repo: str,
@@ -66,7 +59,7 @@ def fetch_and_store_repo(
     except Exception as exc:  # noqa: BLE001 - re-raised as our own type
         raise HttpGetError(f"failed to download {url}: {exc}") from exc
 
-    prefix = f"ws/{run_id}/{version}/"
+    prefix = version_prefix(run_id, version)
     bucket_resource = s3_resource.Bucket(bucket)
 
     members = list(iter_sanitized_members(io.BytesIO(response.content)))
@@ -77,30 +70,17 @@ def fetch_and_store_repo(
         bucket_resource.put_object(Key=key, Body=member.data)
         object_keys.append(key)
 
-    archive_key = f"ws/{run_id}/{version}.tar.gz"
-    bucket_resource.put_object(Key=archive_key, Body=build_consolidated_archive(members))
-
-    s3_client = s3_resource.meta.client
-    workspace_get_url = s3_client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket, "Key": archive_key},
-        ExpiresIn=PRESIGNED_URL_TTL_SECONDS,
-    )
-    junit_key = f"ws/{run_id}/junit/unit_tests.xml"
-    junit_put_url = s3_client.generate_presigned_url(
-        "put_object",
-        Params={"Bucket": bucket, "Key": junit_key},
-        ExpiresIn=PRESIGNED_URL_TTL_SECONDS,
-    )
+    store_archive(s3_resource, bucket, run_id, version, build_archive((member.path, member.data) for member in members))
+    handoff = presign_sandbox_io(s3_resource, bucket, run_id, version, BASELINE_JUNIT_FILENAME)
 
     return FetchResult(
         run_id=run_id,
         bucket=bucket,
         prefix=prefix,
         object_keys=object_keys,
-        workspace_get_url=workspace_get_url,
-        junit_put_url=junit_put_url,
-        junit_key=junit_key,
+        workspace_get_url=handoff["workspace_get_url"],
+        junit_put_url=handoff["junit_put_url"],
+        junit_key=handoff["junit_key"],
     )
 
 

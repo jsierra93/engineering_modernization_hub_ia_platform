@@ -1,64 +1,34 @@
 #!/usr/bin/env bash
 
 #
-# Starts Backstage against either environment:
+# Starts Backstage against the deployed AWS environment (needs AWS_PROFILE credentials):
 #
-#   ./start-backstage.sh local      -> Floci (needs start-local-env.sh running first)
-#   ./start-backstage.sh personal   -> real AWS (needs AWS_PROFILE credentials)
+#   ./start-backstage.sh
 #
-# Reads the target env's Terraform outputs, mints a real Cognito token for
-# the demo user, and starts Backstage pointed at that API.
+# Reads the Terraform outputs, mints a real Cognito token for the demo user
+# and starts Backstage pointed at the deployed API with that token.
 
 set -euo pipefail
 
-TARGET="${1:-}"
 TF="${TERRAFORM_BIN:-terraform}"
 TEST_USERNAME="${MODHUB_TEST_USERNAME:-jsierra93@hotmail.com}"
 TEST_PASSWORD="${MODHUB_TEST_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(18) + "aA1!")')}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_DIR="infrastructure/envs"
+AWS_REGION_NAME="${AWS_DEFAULT_REGION:-us-east-2}"
+export AWS_PROFILE="${AWS_PROFILE:-personal}"
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
 
-case "${TARGET}" in
-  local)
-    ENV_DIR="infrastructure/envs/local"
-    COGNITO_ENDPOINT="http://localhost:4566"
-    COGNITO_REGION="us-east-1"
-    export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
-    export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
-    ;;
-  personal)
-    ENV_DIR="infrastructure/envs"
-    COGNITO_ENDPOINT=""
-    COGNITO_REGION="us-east-2"
-    export AWS_PROFILE="${AWS_PROFILE:-personal}"
-    ;;
-  "")
-    die "no target given -- use '$(basename "$0") local' or '$(basename "$0") personal'"
-    ;;
-  *)
-    die "unknown target '${TARGET}' -- use 'local' or 'personal'"
-    ;;
-esac
-
-echo
-echo "########## TARGET: ${TARGET} ##########"
-
 cd "${REPO_ROOT}"
 
 step "Reading Terraform outputs (${ENV_DIR})"
-TF_OUT="$(cd "${ENV_DIR}" && "${TF}" output -json)" || die "terraform output failed -- has this env been applied?"
+TF_OUT="$(cd "${ENV_DIR}" && "${TF}" output -json)" || die "terraform output failed -- has the environment been applied?"
 py_get() { python3 -c "import json,sys; print(json.loads(sys.argv[1])['$1']['value'])" "${TF_OUT}"; }
 
-AWS_SHAPED_ENDPOINT="$(py_get api_endpoint)"
-if [[ "${TARGET}" == "local" ]]; then
-  API_ID="$(echo "${AWS_SHAPED_ENDPOINT}" | sed -E 's#https://([^.]+)\..*#\1#')"
-  API_BASE_URL="http://localhost:4566/_aws/execute-api/${API_ID}/\$default"
-else
-  API_BASE_URL="${AWS_SHAPED_ENDPOINT%/}"
-fi
-
+API_BASE_URL="$(py_get api_endpoint)"
+API_BASE_URL="${API_BASE_URL%/}"
 POOL_ID_ISSUER="$(py_get cognito_issuer_url)"
 POOL_ID="${POOL_ID_ISSUER##*/}"
 CLI_CLIENT_ID="$(py_get cognito_cli_client_id)"
@@ -69,14 +39,11 @@ NOTIFICATIONS_QUEUE_URL="$(py_get notifications_queue_url)"
 echo "  API:            ${API_BASE_URL}"
 echo "  Cognito issuer: ${POOL_ID_ISSUER}"
 
-step "Minting a Cognito token for ${TEST_USERNAME} (smoke test)"
-JWT="$(python3 - "${POOL_ID}" "${CLI_CLIENT_ID}" "${TEST_USERNAME}" "${TEST_PASSWORD}" "${COGNITO_ENDPOINT}" "${COGNITO_REGION}" <<'PYEOF'
+step "Minting a Cognito token for ${TEST_USERNAME}"
+JWT="$(python3 - "${POOL_ID}" "${CLI_CLIENT_ID}" "${TEST_USERNAME}" "${TEST_PASSWORD}" "${AWS_REGION_NAME}" <<'PYEOF'
 import boto3, sys
-pool_id, client_id, username, password, endpoint, region = sys.argv[1:7]
-kwargs = {"region_name": region}
-if endpoint:
-    kwargs["endpoint_url"] = endpoint
-c = boto3.client("cognito-idp", **kwargs)
+pool_id, client_id, username, password, region = sys.argv[1:6]
+c = boto3.client("cognito-idp", region_name=region)
 c.admin_set_user_password(UserPoolId=pool_id, Username=username, Password=password, Permanent=True)
 auth = c.initiate_auth(
     ClientId=client_id, AuthFlow="USER_PASSWORD_AUTH",
@@ -105,12 +72,12 @@ for PORT in 3000 7007; do
   fi
 done
 
-step "Starting Backstage against '${TARGET}'"
+step "Starting Backstage"
 export MODHUB_API_BASE_URL="${API_BASE_URL}"
 export MODHUB_NOTIFICATIONS_QUEUE_URL="${NOTIFICATIONS_QUEUE_URL}"
-export MODHUB_AWS_REGION="${COGNITO_REGION}"
+export MODHUB_AWS_REGION="${AWS_REGION_NAME}"
 export MODHUB_DEV_TOKEN="${JWT}"
-echo "  auth: fixed dev token (browser OIDC pending -- PLAN.md 5.6)"
+echo "  auth: fixed dev token (browser OIDC pending)"
 export AUTH_SESSION_SECRET="${AUTH_SESSION_SECRET:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 export AUTH_OIDC_METADATA_URL="${POOL_ID_ISSUER}/.well-known/openid-configuration"
 export AUTH_OIDC_CLIENT_ID="${BACKSTAGE_CLIENT_ID}"

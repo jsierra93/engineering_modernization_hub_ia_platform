@@ -1,6 +1,6 @@
 """Runs one of the four demo scenarios end to end against the deployed API and prints the outcome.
 Creates the run, waits for the plan, approves it, waits for the final state and prints the report summary.
-Usage: run_scenario.py exitoso|inviable|inyeccion|prueba_fallida [--no-approve]
+Usage: run_scenario.py exitoso|inviable|inyeccion|prueba_fallida [--no-approve] [--reject] [--max-usd N] [--max-minutes N]
 """
 
 from __future__ import annotations
@@ -82,12 +82,18 @@ def wait_for(base: str, run_id: str, token: str, stop_states: set[str], timeout:
     raise SystemExit(f"timed out waiting for {sorted(stop_states)} (last status: {last})")
 
 
+def option(name: str, default: float) -> float:
+    return float(sys.argv[sys.argv.index(name) + 1]) if name in sys.argv else default
+
+
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in SCENARIOS:
         print(__doc__)
         return 2
     repo, commit = SCENARIOS[sys.argv[1]]
     approve = "--no-approve" not in sys.argv
+    decision = "reject" if "--reject" in sys.argv else "approve"
+    max_usd, max_minutes = option("--max-usd", 2), option("--max-minutes", 20)
 
     outputs = terraform_outputs()
     base = outputs["api_endpoint"].rstrip("/") + "/modhub/v1"
@@ -98,7 +104,7 @@ def main() -> int:
         "POST",
         f"{base}/runs",
         token,
-        {"repo": repo, "commit": commit, "objetivo": OBJETIVO, "max_usd": 2, "max_iterations": 3, "max_minutes": 20, "inputs": {"target_version": "2.11"}},
+        {"repo": repo, "commit": commit, "objetivo": OBJETIVO, "max_usd": max_usd, "max_iterations": 3, "max_minutes": int(max_minutes), "inputs": {"target_version": "2.11"}},
     )
     if status != 201:
         print(f"create failed: {status} {created}")
@@ -108,9 +114,9 @@ def main() -> int:
 
     run = wait_for(base, run_id, token, TERMINAL | {"AWAITING_APPROVAL"}, PLAN_TIMEOUT_SECONDS)
     if run["status"] == "AWAITING_APPROVAL" and approve:
-        print("==> approving the plan")
+        print(f"==> {decision} the plan")
         token = mint_token(outputs)
-        code, response = call("POST", f"{base}/runs/{run_id}/approval", token, {"decision": "approve", "plan_hash": run["plan_hash"]})
+        code, response = call("POST", f"{base}/runs/{run_id}/approval", token, {"decision": decision, "plan_hash": run["plan_hash"]})
         if code != 200:
             print(f"approval failed: {code} {response}")
             return 1

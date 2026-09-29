@@ -5,7 +5,7 @@ Strategies are discovered by their strategy.marker file, so adding one needs no 
 from __future__ import annotations
 
 from core_py.limits import platform_ceiling
-from core_py.models import StrategyManifest
+from core_py.strategy_models import StrategyManifest
 
 
 def build_registry():

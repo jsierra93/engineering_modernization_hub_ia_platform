@@ -30,6 +30,7 @@ class BudgetStatus:
 class VerdictInputs:
     budget: BudgetStatus
 
+    budget_guard_stopped: bool = False
     baseline_failed: bool = False
     nothing_to_remediate: bool = False
     agent_concluded_infeasible: bool = False
@@ -61,6 +62,8 @@ def evaluate_verdict_with_reason(inputs: VerdictInputs) -> tuple[RunStatus, str]
         return RunStatus.PRESUPUESTO_AGOTADO, "BUDGET_USD_EXHAUSTED"
     if inputs.budget.elapsed_minutes >= inputs.budget.max_minutes:
         return RunStatus.PRESUPUESTO_AGOTADO, "TIME_EXHAUSTED"
+    if inputs.budget_guard_stopped:
+        return RunStatus.PRESUPUESTO_AGOTADO, "BUDGET_WORST_CASE"
     if (
         inputs.budget.iterations_used >= inputs.budget.max_iterations
         and not inputs.fix_iterations_exhausted_without_pass

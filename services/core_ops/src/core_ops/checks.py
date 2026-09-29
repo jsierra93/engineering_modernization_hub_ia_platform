@@ -8,7 +8,7 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from core_py.models import CheckSpec
+from core_py.strategy_models import CheckSpec
 
 FALLBACK_CHECKS = (CheckSpec(name="unit_tests"), CheckSpec(name="lint", blocking=False))
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Runs one demo scenario end to end against the deployed API (create, approve, wait, report).
-#   ./scripts/run-scenario.sh exitoso|inviable|inyeccion|prueba_fallida [--no-approve]
+#   ./scripts/run-scenario.sh exitoso|inviable|inyeccion|prueba_fallida [--no-approve] [--reject] [--max-usd N] [--max-minutes N]
 # Each run spends Bedrock budget.
 
 set -euo pipefail

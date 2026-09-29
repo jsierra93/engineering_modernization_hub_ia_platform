@@ -200,7 +200,8 @@
           "phase": "discovery_plan",
           "strategy_id.$": "$.strategy_id",
           "excluded_paths.$": "$.excluded_paths",
-          "objetivo.$": "$.objetivo"
+          "objetivo.$": "$.objetivo",
+          "max_usd.$": "$.max_usd"
         }
       },
       "Retry": [
@@ -213,6 +214,7 @@
       ],
       "ResultSelector": {
         "plan.$": "$.Payload.result",
+        "budget_stopped.$": "$.Payload.budget_stopped",
         "cost_usd.$": "$.Payload.cost_usd",
         "denials.$": "$.Payload.denials",
         "model_id.$": "$.Payload.model_id"
@@ -239,6 +241,7 @@
           "run_id.$": "$.run_id",
           "delta_usd.$": "$.discovery_plan_result.cost_usd",
           "denials.$": "$.discovery_plan_result.denials",
+          "budget_stopped.$": "$.discovery_plan_result.budget_stopped",
           "model_id.$": "$.discovery_plan_result.model_id",
           "phase": "discovery_plan"
         }
@@ -254,7 +257,9 @@
       ],
       "ResultSelector": {
         "spent_usd.$": "$.Payload.spent_usd",
-        "budget_exhausted.$": "$.Payload.budget_exhausted"
+        "budget_exhausted.$": "$.Payload.budget_exhausted",
+        "budget_guard_stopped.$": "$.Payload.budget_guard_stopped",
+        "time_exhausted.$": "$.Payload.time_exhausted"
       },
       "Catch": [
         {
@@ -271,8 +276,10 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.spend_result.budget_exhausted",
-          "BooleanEquals": true,
+          "Or": [
+            { "Variable": "$.spend_result.budget_exhausted", "BooleanEquals": true },
+            { "Variable": "$.spend_result.time_exhausted", "BooleanEquals": true }
+          ],
           "Next": "ComputeBudgetExhaustedVerdict"
         }
       ],
@@ -413,21 +420,54 @@
         }
       ],
       "ResultPath": "$.approval_result",
+      "Next": "SnapshotWorkspace"
+    },
+
+    "SnapshotWorkspace": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
+      "Parameters": {
+        "FunctionName": "${core_ops_lambda_arn}",
+        "Payload": {
+          "action": "snapshot_workspace",
+          "run_id.$": "$.run_id",
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "files.$": "$.Payload.files"
+      },
+      "ResultPath": "$.snapshot_result",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.agent_error",
+          "Next": "RecordUnrecoverableVerdict"
+        }
+      ],
       "Next": "Implement"
     },
 
-    "Implement": {
+    "PrepareSandbox": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "TimeoutSeconds": ${agent_task_timeout_seconds},
+      "TimeoutSeconds": ${lambda_task_timeout_seconds},
       "Parameters": {
-        "FunctionName": "${agent_phase_lambda_arn}",
+        "FunctionName": "${core_ops_lambda_arn}",
         "Payload": {
+          "action": "prepare_sandbox",
           "run_id.$": "$.run_id",
-          "phase": "implement",
-          "strategy_id.$": "$.strategy_id",
-          "excluded_paths.$": "$.excluded_paths",
-          "plan.$": "$.discovery_plan_result.plan"
+          "workspaces_bucket.$": "$.fetch_repo_result.bucket",
+          "iteration.$": "$.iteration"
         }
       },
       "Retry": [
@@ -441,8 +481,45 @@
       "ResultSelector": {
         "workspace_get_url.$": "$.Payload.workspace_get_url",
         "junit_put_url.$": "$.Payload.junit_put_url",
-        "junit_key.$": "$.Payload.junit_key",
-        "bucket.$": "$.Payload.bucket",
+        "junit_key.$": "$.Payload.junit_key"
+      },
+      "ResultPath": "$.sandbox_io",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.agent_error",
+          "Next": "RecordUnrecoverableVerdict"
+        }
+      ],
+      "Next": "Verify"
+    },
+
+    "Implement": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": ${agent_task_timeout_seconds},
+      "Parameters": {
+        "FunctionName": "${agent_phase_lambda_arn}",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "phase": "implement",
+          "strategy_id.$": "$.strategy_id",
+          "excluded_paths.$": "$.excluded_paths",
+          "plan.$": "$.discovery_plan_result.plan",
+          "max_usd.$": "$.max_usd",
+          "spent_usd.$": "$.spend_result.spent_usd"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "budget_stopped.$": "$.Payload.budget_stopped",
         "cost_usd.$": "$.Payload.cost_usd",
         "denials.$": "$.Payload.denials",
         "model_id.$": "$.Payload.model_id"
@@ -469,6 +546,7 @@
           "run_id.$": "$.run_id",
           "delta_usd.$": "$.implement_result.cost_usd",
           "denials.$": "$.implement_result.denials",
+          "budget_stopped.$": "$.implement_result.budget_stopped",
           "model_id.$": "$.implement_result.model_id",
           "phase": "implement"
         }
@@ -484,7 +562,9 @@
       ],
       "ResultSelector": {
         "spent_usd.$": "$.Payload.spent_usd",
-        "budget_exhausted.$": "$.Payload.budget_exhausted"
+        "budget_exhausted.$": "$.Payload.budget_exhausted",
+        "budget_guard_stopped.$": "$.Payload.budget_guard_stopped",
+        "time_exhausted.$": "$.Payload.time_exhausted"
       },
       "Catch": [
         {
@@ -501,12 +581,14 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.spend_result.budget_exhausted",
-          "BooleanEquals": true,
+          "Or": [
+            { "Variable": "$.spend_result.budget_exhausted", "BooleanEquals": true },
+            { "Variable": "$.spend_result.time_exhausted", "BooleanEquals": true }
+          ],
           "Next": "ComputeBudgetExhaustedVerdict"
         }
       ],
-      "Default": "Verify"
+      "Default": "PrepareSandbox"
     },
 
     "Verify": {
@@ -529,8 +611,8 @@
               "Name": "${sandbox_container_name}",
               "Command": ["unit_tests"],
               "Environment": [
-                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.implement_result.workspace_get_url" },
-                { "Name": "JUNIT_PUT_URL", "Value.$": "$.implement_result.junit_put_url" }
+                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.sandbox_io.workspace_get_url" },
+                { "Name": "JUNIT_PUT_URL", "Value.$": "$.sandbox_io.junit_put_url" }
               ]
             }
           ]
@@ -586,9 +668,11 @@
           "phase": "fix",
           "strategy_id.$": "$.strategy_id",
           "excluded_paths.$": "$.excluded_paths",
-          "junit_key.$": "$.implement_result.junit_key",
+          "junit_key.$": "$.sandbox_io.junit_key",
           "iteration.$": "$.iteration",
-          "max_iterations.$": "$.max_iterations"
+          "max_iterations.$": "$.max_iterations",
+          "max_usd.$": "$.max_usd",
+          "spent_usd.$": "$.spend_result.spent_usd"
         }
       },
       "Retry": [
@@ -600,10 +684,7 @@
         }
       ],
       "ResultSelector": {
-        "workspace_get_url.$": "$.Payload.workspace_get_url",
-        "junit_put_url.$": "$.Payload.junit_put_url",
-        "junit_key.$": "$.Payload.junit_key",
-        "bucket.$": "$.Payload.bucket",
+        "budget_stopped.$": "$.Payload.budget_stopped",
         "cost_usd.$": "$.Payload.cost_usd",
         "denials.$": "$.Payload.denials",
         "model_id.$": "$.Payload.model_id"
@@ -630,6 +711,7 @@
           "run_id.$": "$.run_id",
           "delta_usd.$": "$.implement_result.cost_usd",
           "denials.$": "$.implement_result.denials",
+          "budget_stopped.$": "$.implement_result.budget_stopped",
           "model_id.$": "$.implement_result.model_id",
           "phase": "implement"
         }
@@ -645,7 +727,9 @@
       ],
       "ResultSelector": {
         "spent_usd.$": "$.Payload.spent_usd",
-        "budget_exhausted.$": "$.Payload.budget_exhausted"
+        "budget_exhausted.$": "$.Payload.budget_exhausted",
+        "budget_guard_stopped.$": "$.Payload.budget_guard_stopped",
+        "time_exhausted.$": "$.Payload.time_exhausted"
       },
       "Catch": [
         {
@@ -662,8 +746,10 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.spend_result.budget_exhausted",
-          "BooleanEquals": true,
+          "Or": [
+            { "Variable": "$.spend_result.budget_exhausted", "BooleanEquals": true },
+            { "Variable": "$.spend_result.time_exhausted", "BooleanEquals": true }
+          ],
           "Next": "ComputeBudgetExhaustedVerdict"
         }
       ],
@@ -683,7 +769,7 @@
       "Type": "Pass",
       "InputPath": "$.bump.iteration",
       "ResultPath": "$.iteration",
-      "Next": "Verify"
+      "Next": "PrepareSandbox"
     },
 
     "RecordUnrecoverableVerdict": {
@@ -768,6 +854,7 @@
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
           "final_junit_key.$": "$.fetch_repo_result.junit_key",
+          "budget_guard_stopped.$": "$.spend_result.budget_guard_stopped",
           "checks": {}
         }
       },
@@ -839,7 +926,7 @@
           "run_id.$": "$.run_id",
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
-          "final_junit_key.$": "$.implement_result.junit_key",
+          "final_junit_key.$": "$.sandbox_io.junit_key",
           "fix_iterations_exhausted_without_pass": true,
           "check_evidence": {
             "unit_tests": { "error.$": "$.verify_error" }
@@ -885,8 +972,8 @@
               "Name": "${sandbox_container_name}",
               "Command": ["lint"],
               "Environment": [
-                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.implement_result.workspace_get_url" },
-                { "Name": "JUNIT_PUT_URL", "Value.$": "$.implement_result.junit_put_url" }
+                { "Name": "WORKSPACE_GET_URL", "Value.$": "$.sandbox_io.workspace_get_url" },
+                { "Name": "JUNIT_PUT_URL", "Value.$": "$.sandbox_io.junit_put_url" }
               ]
             }
           ]
@@ -926,7 +1013,7 @@
           "run_id.$": "$.run_id",
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
-          "final_junit_key.$": "$.implement_result.junit_key",
+          "final_junit_key.$": "$.sandbox_io.junit_key",
           "baseline_clean.$": "$.baseline_clean",
           "check_evidence": {
             "unit_tests": { "exit_code.$": "$.verify_result.exit_code" },
@@ -965,7 +1052,7 @@
           "run_id.$": "$.run_id",
           "workspaces_bucket.$": "$.fetch_repo_result.bucket",
           "baseline_junit_key.$": "$.fetch_repo_result.junit_key",
-          "final_junit_key.$": "$.implement_result.junit_key",
+          "final_junit_key.$": "$.sandbox_io.junit_key",
           "baseline_clean.$": "$.baseline_clean",
           "check_evidence": {
             "unit_tests": { "exit_code.$": "$.verify_result.exit_code" },

@@ -3,7 +3,7 @@
 # Rebuild what changed and apply it.
 #
 #   ./deploy.sh personal                          apply only
-#   ./deploy.sh personal api core_ops             rebuild those Lambdas, then apply
+#   ./deploy.sh personal core                     rebuild that artifact, then apply (core = api, core_ops, fetch_repo, open_pr)
 #   ./deploy.sh personal --all                    rebuild every Lambda, then apply
 #   ./deploy.sh personal --sandbox v4             build+push the sandbox image as v4,
 #                                                 record the tag in sandbox.auto.tfvars, apply
@@ -11,7 +11,6 @@
 #
 # The Lambda architecture comes from var.lambda_architecture in the env (override: MODHUB_LAMBDA_ARCH).
 # --plan-only stops before applying.
-# Note: Only personal (real AWS) environment is available. Local development uses docker compose.
 
 set -euo pipefail
 
@@ -20,7 +19,7 @@ shift || true
 
 TF="${TERRAFORM_BIN:-terraform}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ALL_SERVICES=(api core_ops agent_phase fetch_repo fetch_doc open_pr)
+ALL_SERVICES=(core agent_phase fetch_doc)
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }

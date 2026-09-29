@@ -11,17 +11,19 @@ from typing import Any
 
 from core_py import ModelRole, estimate_cost_usd, log_event, rate_for, resolve_model_id, resolve_scope
 from core_py.constants import BASELINE_VERSION, WORKING_VERSION, WORKSPACE_BUCKET_ENV
+from core_py.workspace import phase_trail_key
 
 from agent_phase.agent_builder import build_agent
+from agent_phase.budget_guard import BudgetGuard
 from agent_phase.fetch_doc_client import make_fetch_doc_fn
 from agent_phase.guardrail import Guardrail, UntrustedContentBlocked
 from agent_phase.phases import run_discovery_plan, run_fix, run_implement
 from agent_phase.schemas import DiscoveryPlan
-from agent_phase.sandbox_handoff import copy_version, repackage_workspace_for_sandbox
-from agent_phase.strategy_lookup import get_strategy_manifest
+from core_py.strategy_catalog import get_strategy_manifest
 from agent_phase.workspace import S3Workspace
 
 FETCH_DOC_FUNCTION_NAME_ENV = "MODHUB_FETCH_DOC_FUNCTION_NAME"
+AGENT_ROLES = (ModelRole.ANALYSIS, ModelRole.CODE)
 
 
 class UnknownPhaseError(Exception):
@@ -44,30 +46,37 @@ class _PhaseContext:
     build_agent_fn: Any
     agent_kwargs: dict[str, Any]
     on_block: Any
+    remaining_usd: float | None = None
+    guard: BudgetGuard | None = None
 
     def build_agent(self, role: ModelRole, max_tokens: int, **extra: Any):
-        return self.build_agent_fn(role=role, max_tokens=max_tokens, **extra, **self.agent_kwargs)
+        self.guard = BudgetGuard(
+            remaining_usd=self.remaining_usd,
+            model_id=resolve_model_id(role),
+            max_output_tokens=max_tokens,
+            run_id=self.run_id,
+            phase=self.phase,
+        )
+        return self.build_agent_fn(role=role, max_tokens=max_tokens, budget_guard=self.guard, **extra, **self.agent_kwargs)
 
 
 def _phase_discovery_plan(ctx: _PhaseContext):
     agent = ctx.build_agent(
         ModelRole.ANALYSIS, ctx.manifest.model_limits.analysis_max_tokens, include_write_tool=False
     )
-    result = run_discovery_plan(agent, objetivo=ctx.event["objetivo"], strategy_summary=ctx.manifest.title)
-    return agent, result, {}
+    return agent, run_discovery_plan(
+        agent,
+        objetivo=ctx.event["objetivo"],
+        strategy_summary=ctx.manifest.title,
+        official_sources=ctx.manifest.sources,
+        guard=ctx.guard,
+    )
 
 
 def _phase_implement(ctx: _PhaseContext):
     agent = ctx.build_agent(ModelRole.CODE, ctx.manifest.model_limits.code_max_tokens)
     plan = DiscoveryPlan.model_validate(ctx.event["plan"])
-    copied = copy_version(ctx.s3_resource, ctx.bucket, ctx.run_id, BASELINE_VERSION, WORKING_VERSION)
-    log_event("agent_phase.workspace_snapshot", run_id=ctx.run_id, files=copied,
-              frm=BASELINE_VERSION, to=WORKING_VERSION)
-    result = run_implement(agent, plan=plan)
-    handoff = repackage_workspace_for_sandbox(
-        ctx.s3_resource, ctx.bucket, ctx.run_id, junit_filename="verify.xml", version=WORKING_VERSION
-    )
-    return agent, result, handoff
+    return agent, run_implement(agent, plan=plan, guard=ctx.guard)
 
 
 def _screened_junit_excerpt(ctx: _PhaseContext) -> str:
@@ -85,17 +94,13 @@ def _screened_junit_excerpt(ctx: _PhaseContext) -> str:
 
 def _phase_fix(ctx: _PhaseContext):
     agent = ctx.build_agent(ModelRole.CODE, ctx.manifest.model_limits.code_max_tokens)
-    result = run_fix(
+    return agent, run_fix(
         agent,
         junit_failure_excerpt=_screened_junit_excerpt(ctx),
         iteration=ctx.event["iteration"],
         max_iterations=ctx.event["max_iterations"],
+        guard=ctx.guard,
     )
-    handoff = repackage_workspace_for_sandbox(
-        ctx.s3_resource, ctx.bucket, ctx.run_id, junit_filename=f"verify_iter{ctx.event['iteration']}.xml",
-        version=WORKING_VERSION,
-    )
-    return agent, result, handoff
 
 
 _PHASES = {
@@ -105,12 +110,20 @@ _PHASES = {
 }
 
 
-def _cost_of(agent: Any, phase: str) -> tuple[str, dict[str, int], float]:
+def _cost_of(agent: Any, phase: str, *, stopped_by_guard: bool) -> tuple[str, dict[str, int], float]:
     usage = agent.event_loop_metrics.accumulated_usage
-    if usage["inputTokens"] == 0 and usage["outputTokens"] == 0:
-        raise PhaseProducedNothingError(f"phase {phase!r} consumed no tokens -- the model was never reached")
     model_id = agent.model.get_config()["model_id"]
+    if usage["inputTokens"] == 0 and usage["outputTokens"] == 0:
+        if stopped_by_guard:
+            return model_id, usage, 0.0
+        raise PhaseProducedNothingError(f"phase {phase!r} consumed no tokens -- the model was never reached")
     return model_id, usage, estimate_cost_usd(model_id, usage["inputTokens"], usage["outputTokens"])
+
+
+def _remaining_usd(event: dict[str, Any]) -> float | None:
+    if "max_usd" not in event:
+        return None
+    return max(0.0, float(event["max_usd"]) - float(event.get("spent_usd", 0.0)))
 
 
 def _run(
@@ -124,7 +137,7 @@ def _run(
     phase = event["phase"]
 
     manifest = get_strategy_manifest(event["strategy_id"])
-    for role in ModelRole:
+    for role in AGENT_ROLES:
         rate_for(resolve_model_id(role))
     bucket = os.environ[WORKSPACE_BUCKET_ENV]
     workspace_version = BASELINE_VERSION if phase == "discovery_plan" else WORKING_VERSION
@@ -161,13 +174,15 @@ def _run(
             on_block=on_block,
         ),
         on_block=on_block,
+        remaining_usd=_remaining_usd(event),
     )
 
     if phase not in _PHASES:
         raise UnknownPhaseError(f"phase {phase!r} is not implemented")
-    agent, result, handoff = _PHASES[phase](ctx)
+    agent, result = _PHASES[phase](ctx)
 
-    model_id, usage, cost_usd = _cost_of(agent, phase)
+    stopped = result is None
+    model_id, usage, cost_usd = _cost_of(agent, phase, stopped_by_guard=stopped)
     log_event(
         "agent_phase.completed",
         run_id=run_id,
@@ -183,10 +198,10 @@ def _run(
         "run_id": run_id,
         "phase": phase,
         "model_id": model_id,
-        "result": result.model_dump(mode="json"),
+        "result": None if stopped else result.model_dump(mode="json"),
+        "budget_stopped": stopped,
         "denials": denials,
         "cost_usd": cost_usd,
-        **handoff,
     }
 
     _persist_phase_trail(s3_resource, bucket, run_id, phase, event, response)
@@ -209,7 +224,7 @@ def _persist_phase_trail(
     }
     trail_name = f"{phase}_{phase_input['iteration']}" if phase == "fix" and "iteration" in phase_input else phase
     try:
-        s3_resource.Object(bucket, f"ws/{run_id}/phases/{trail_name}.json").put(
+        s3_resource.Object(bucket, phase_trail_key(run_id, trail_name)).put(
             Body=json.dumps(trail, default=str).encode("utf-8"),
             ContentType="application/json",
         )

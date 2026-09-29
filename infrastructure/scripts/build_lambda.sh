@@ -35,41 +35,27 @@ for strategy_dir in "${REPO_ROOT}"/strategies/*/src/*/; do
 done
 
 case "${SERVICE}" in
-  api)
-    SERVICE_SRC="${REPO_ROOT}/services/api/src/api"
-    SERVICE_PKG_NAME="api"
+  core)
+    SERVICE_PACKAGES=(
+      "${REPO_ROOT}/services/api/src/api:api"
+      "${REPO_ROOT}/services/core_ops/src/core_ops:core_ops"
+      "${REPO_ROOT}/services/fetch_repo/src/fetch_repo:fetch_repo"
+      "${REPO_ROOT}/services/open_pr/src/open_pr:open_pr"
+    )
     WORKSPACE_PACKAGES=(
       "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
       "${STRATEGY_PACKAGES[@]}"
     )
-    THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34")
-    ;;
-  fetch_repo)
-    SERVICE_SRC="${REPO_ROOT}/services/fetch_repo/src/fetch_repo"
-    SERVICE_PKG_NAME="fetch_repo"
-    WORKSPACE_PACKAGES=("${REPO_ROOT}/packages/core_py/src/core_py:core_py")
     THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34" "requests>=2.31")
     ;;
-  core_ops)
-    SERVICE_SRC="${REPO_ROOT}/services/core_ops/src/core_ops"
-    SERVICE_PKG_NAME="core_ops"
-    WORKSPACE_PACKAGES=(
-      "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
-      "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
-      "${STRATEGY_PACKAGES[@]}"
-    )
-    THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34")
-    ;;
   fetch_doc)
-    SERVICE_SRC="${REPO_ROOT}/services/fetch_doc/src/fetch_doc"
-    SERVICE_PKG_NAME="fetch_doc"
+    SERVICE_PACKAGES=("${REPO_ROOT}/services/fetch_doc/src/fetch_doc:fetch_doc")
     WORKSPACE_PACKAGES=()
     THIRD_PARTY_DEPS=("requests>=2.31")
     ;;
   agent_phase)
-    SERVICE_SRC="${REPO_ROOT}/services/agent_phase/src/agent_phase"
-    SERVICE_PKG_NAME="agent_phase"
+    SERVICE_PACKAGES=("${REPO_ROOT}/services/agent_phase/src/agent_phase:agent_phase")
     WORKSPACE_PACKAGES=(
       "${REPO_ROOT}/packages/core_py/src/core_py:core_py"
       "${REPO_ROOT}/strategies/_sdk/src/strategies_sdk:strategies_sdk"
@@ -77,22 +63,18 @@ case "${SERVICE}" in
     )
     THIRD_PARTY_DEPS=("strands-agents==1.57.1" "pydantic>=2.7" "boto3>=1.34")
     ;;
-  open_pr)
-    SERVICE_SRC="${REPO_ROOT}/services/open_pr/src/open_pr"
-    SERVICE_PKG_NAME="open_pr"
-    WORKSPACE_PACKAGES=("${REPO_ROOT}/packages/core_py/src/core_py:core_py")
-    THIRD_PARTY_DEPS=("pydantic>=2.7" "boto3>=1.34" "requests>=2.31")
-    ;;
   *)
-    echo "error: unsupported service '${SERVICE}' -- use api, fetch_repo, core_ops, fetch_doc, agent_phase or open_pr" >&2
+    echo "error: unsupported service '${SERVICE}' -- use core (api, core_ops, fetch_repo, open_pr in one artifact), fetch_doc or agent_phase" >&2
     exit 1
     ;;
 esac
 
-if [ ! -d "${SERVICE_SRC}" ]; then
-  echo "error: ${SERVICE_SRC} not found - expected services/${SERVICE}'s real handler" >&2
-  exit 1
-fi
+for pkg_pair in "${SERVICE_PACKAGES[@]}"; do
+  if [ ! -d "${pkg_pair%%:*}" ]; then
+    echo "error: ${pkg_pair%%:*} not found - expected the service's real handler" >&2
+    exit 1
+  fi
+done
 for pkg_pair in "${WORKSPACE_PACKAGES[@]+"${WORKSPACE_PACKAGES[@]}"}"; do
   pkg_src="${pkg_pair%%:*}"
   if [ ! -d "${pkg_src}" ]; then
@@ -105,11 +87,7 @@ echo "==> Cleaning build dir: ${BUILD_DIR}"
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 
-echo "==> Copying services/${SERVICE}/src/${SERVICE_PKG_NAME} (read-only source, not modified)"
-cp -r "${SERVICE_SRC}" "${BUILD_DIR}/${SERVICE_PKG_NAME}"
-find "${BUILD_DIR}/${SERVICE_PKG_NAME}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-
-for pkg_pair in "${WORKSPACE_PACKAGES[@]+"${WORKSPACE_PACKAGES[@]}"}"; do
+for pkg_pair in "${SERVICE_PACKAGES[@]}" "${WORKSPACE_PACKAGES[@]+"${WORKSPACE_PACKAGES[@]}"}"; do
   pkg_src="${pkg_pair%%:*}"
   pkg_name="${pkg_pair##*:}"
   echo "==> Copying ${pkg_src} (read-only source, not modified)"

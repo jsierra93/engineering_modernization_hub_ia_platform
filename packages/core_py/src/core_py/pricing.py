@@ -22,7 +22,7 @@ class UnknownModelPricingError(Exception):
     pass
 
 
-def _bare_model_id(model_id: str) -> str:
+def bare_model_id(model_id: str) -> str:
     for prefix in _PROFILE_PREFIXES:
         if model_id.startswith(prefix):
             return model_id[len(prefix) :]
@@ -41,7 +41,7 @@ def _load_rates() -> dict[str, TokenRate]:
 
 def rate_for(model_id: str) -> TokenRate:
     rates = _load_rates()
-    rate = rates.get(model_id) or rates.get(_bare_model_id(model_id))
+    rate = rates.get(model_id) or rates.get(bare_model_id(model_id))
     if rate is None:
         raise UnknownModelPricingError(f"no pricing configured for model_id {model_id!r} in {MODEL_PRICING_ENV}")
     return rate

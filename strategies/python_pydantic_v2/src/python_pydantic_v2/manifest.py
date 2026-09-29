@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core_py.models import CheckSpec, StrategyLimit, StrategyLimits, StrategyManifest
+from core_py.strategy_models import CheckSpec, StrategyLimit, StrategyLimits, StrategyManifest
 
 _INPUTS = {
     "target_version": {

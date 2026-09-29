@@ -115,13 +115,24 @@ data "aws_iam_policy_document" "agent_phase_lambda_scope" {
   }
 
   statement {
-    sid    = "WorkspacePrefixReadWrite"
-    effect = "Allow"
-    actions = [
-      "s3:PutObject",
-      "s3:GetObject",
-    ]
+    sid       = "CountTokensBeforeEachCall"
+    effect    = "Allow"
+    actions   = ["bedrock:CountTokens"]
+    resources = local.model_arns
+  }
+
+  statement {
+    sid       = "ReadWorkspaces"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
     resources = ["${var.workspaces_bucket_arn}/ws/*"]
+  }
+
+  statement {
+    sid       = "WriteOnlyTheWorkingCopyAndPhaseTrail"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${var.workspaces_bucket_arn}/ws/*/v1/*", "${var.workspaces_bucket_arn}/ws/*/phases/*"]
   }
 
   statement {

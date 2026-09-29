@@ -98,8 +98,8 @@ variable "aws_region" {
   type        = string
 }
 
-variable "analysis_model_id" {
-  description = "Bedrock model ID resolved for ModelRole.ANALYSIS (core_py.bedrock_models) -- CLAUDE.md's one documented Bedrock exception, the objective->strategy resolver in services/api/resolver. The IAM policy is scoped to exactly this model ID, never bedrock:* across all models."
+variable "resolver_model_id" {
+  description = "Bedrock model ID (or inference profile) for ModelRole.RESOLVER: the one read-only call that maps the free-text objective to a registered strategy (services/api/resolver). The IAM policy is scoped to exactly this ID, never bedrock:* across all models."
   type        = string
 }
 

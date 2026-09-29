@@ -8,8 +8,10 @@ from collections.abc import Callable
 
 from core_py import ModelRole, resolve_model_id
 from strands import Agent
+from strands.hooks import BeforeModelCallEvent
 from strands.models import BedrockModel
 
+from agent_phase.budget_guard import BudgetGuard
 from agent_phase.guardrail import Guardrail
 from agent_phase.policy_gate import DenialEvent, WritableScopeGate
 from agent_phase.tools import FetchDocFn, OnBlockFn, build_tools
@@ -46,6 +48,7 @@ def build_agent(
     on_block: OnBlockFn | None = None,
     region_name: str | None = None,
     include_write_tool: bool = True,
+    budget_guard: BudgetGuard | None = None,
 ) -> Agent:
     bedrock_kwargs: dict = {
         "model_id": resolve_model_id(role),
@@ -66,9 +69,12 @@ def build_agent(
         on_block=on_block,
     )
 
-    return Agent(
+    agent = Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=tools,
         interventions=[gate],
     )
+    if budget_guard is not None:
+        agent.hooks.add_callback(BeforeModelCallEvent, budget_guard.before_model_call)
+    return agent

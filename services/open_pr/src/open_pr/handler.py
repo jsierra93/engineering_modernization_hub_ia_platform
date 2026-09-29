@@ -9,6 +9,8 @@ import os
 from typing import Any
 
 from core_py.constants import WORKING_VERSION, WORKSPACE_BUCKET_ENV
+from core_py.identity import caller_sub, is_owner
+from core_py.workspace import read_files
 
 GITHUB_API = "https://api.github.com"
 GITHUB_TOKEN_SECRET_ARN_ENV = "GITHUB_TOKEN_SECRET_ARN"
@@ -29,22 +31,6 @@ def _response(status: int, payload: dict[str, Any]) -> dict[str, Any]:
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(payload, default=str),
     }
-
-
-def _requested_by(event: dict[str, Any]) -> str:
-    claims = (
-        event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims", {})
-    )
-    return claims.get("sub") or (event.get("headers") or {}).get("x-requested-by") or "anonymous"
-
-
-def _workspace_files(s3_resource: Any, bucket: str, run_id: str, paths: list[str]) -> dict[str, bytes]:
-    prefix = f"ws/{run_id}/{WORKING_VERSION}/"
-    files: dict[str, bytes] = {}
-    for path in paths:
-        obj = s3_resource.Object(bucket, f"{prefix}{path}")
-        files[path] = obj.get()["Body"].read()
-    return files
 
 
 class GitHub:
@@ -142,7 +128,10 @@ def open_pull_request(
 
     run_data = run.model_dump(mode="json")
 
-    if _requested_by(event) != run_data["requested_by"]:
+    if caller_sub(event) is None:
+        return _response(401, {"code": "UNAUTHENTICATED", "message": "A signed-in caller is required.", "run_id": run_id})
+
+    if not is_owner(event, run_data["requested_by"]):
         return _response(
             403,
             {"code": "NOT_REQUESTER", "message": "Only the requester can publish this run.", "run_id": run_id},
@@ -177,7 +166,7 @@ def open_pull_request(
         )
 
     token = secrets_client.get_secret_value(SecretId=os.environ[GITHUB_TOKEN_SECRET_ARN_ENV])["SecretString"]
-    files = _workspace_files(s3_resource, os.environ[WORKSPACE_BUCKET_ENV], run_id, changed)
+    files = read_files(s3_resource, os.environ[WORKSPACE_BUCKET_ENV], run_id, WORKING_VERSION, changed)
 
     github = GitHub(token, session)
     repo = run_data["repo"]

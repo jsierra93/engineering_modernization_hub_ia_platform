@@ -14,8 +14,8 @@ from core_py.persistence import (
     BudgetExceededError,
     EventsTable,
     RunsTable,
-    create_tables,
 )
+from support_tables import create_tables
 
 
 @pytest.fixture()

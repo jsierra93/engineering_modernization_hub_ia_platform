@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from core_py.constants import BASELINE_VERSION
 from core_py.scope import normalize
+from core_py.workspace import version_prefix
 
 from typing import Any, Protocol
 
@@ -24,7 +25,7 @@ class Workspace(Protocol):
 class S3Workspace:
     def __init__(self, s3_resource: Any, bucket: str, run_id: str, version: str = BASELINE_VERSION) -> None:
         self._bucket = s3_resource.Bucket(bucket)
-        self._prefix = f"ws/{run_id}/{version}/"
+        self._prefix = version_prefix(run_id, version)
 
     def _join(self, path: str) -> str:
         if not _is_within_root(path):
